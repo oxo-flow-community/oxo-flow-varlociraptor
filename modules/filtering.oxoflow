@@ -1,0 +1,323 @@
+# Call filtering and FDR control (upstream workflow/rules/filtering.smk).
+#
+# Rule map (upstream rule -> this module):
+#   filter_by_annotation -> filtering::filter_by_annotation
+#   gather_calls         -> filtering::gather_calls        (bcftools concat v2.3.2 wrapper)
+#   control_fdr          -> filtering::control_fdr_{SNV,INS,DEL,MNV,BND,INV,DUP,REP}
+#   merge_calls          -> filtering::merge_calls         (bcftools concat v2.3.2 wrapper)
+#   convert_phred_scores -> filtering::convert_phred_scores
+#   bcf_index            -> filtering::bcf_index_{filtered,fdr}
+#
+# Deviations (details in README.md):
+#   * filter_odds is not in the default path: mode local-smart and a filter
+#     are configured, so control_fdr consumes the "filtered_ann" callset
+#     (get_control_fdr_input in common.smk).
+#   * The event wildcard is frozen to "some_id" (the only event defined in the
+#     upstream default config), and vartype is frozen to the 8 upstream values.
+#   * control_fdr fdr 0.05, mode local-smart, no --smart-retain-artifacts.
+#   * get_annotation_filter_aux_files resolves config/super_interesting_genes.tsv
+#     relative to the workflow root, exactly as upstream.
+
+[workflow]
+name = "filtering"
+
+# ---- upstream rule: filter_by_annotation ------------------------------------
+# impact_filter + gene_list_filter, expression
+# "(('HIGH' in ANN['IMPACT'])) and ((ANN['SYMBOL'] in AUX['super_interesting_genes']))"
+# as built by get_annotation_filter_expression.
+[[rules]]
+name = "filter_by_annotation"
+description = "Keep HIGH-impact variants in super-interesting genes (vembrane filter)"
+input = [
+    "results/calls/db_annotated/SRR702070_group/SRR702070_group.variants.0.bcf",
+    "results/calls/db_annotated/SRR702070_group/SRR702070_group.variants.0.bcf.csi",
+    "config/super_interesting_genes.tsv",
+]
+output = ["results/calls/filtered/filtered_ann/SRR702070_group/some_id/SRR702070_group.variants.0.bcf"]
+shell = """
+vembrane filter \
+  --aux super_interesting_genes=config/super_interesting_genes.tsv \
+  "(('HIGH' in ANN['IMPACT'])) and ((ANN['SYMBOL'] in AUX['super_interesting_genes']))" \
+  {input[0]} --output-fmt bcf --output {output} &> {log}
+"""
+log = "logs/filter-calls/annotation/SRR702070_group/some_id/SRR702070_group.variants.0.log"
+
+[rules.environment]
+conda = "envs/vembrane.yaml"
+
+# ---- upstream rule: gather_calls --------------------------------------------
+# bcftools concat v2.3.2 wrapper (-a) over the annotation-filtered chunks.
+[[rules]]
+name = "gather_calls"
+description = "Gather annotation-filtered chunks (bcftools concat v2.3.2 wrapper)"
+input = [
+    "results/calls/filtered/filtered_ann/SRR702070_group/some_id/SRR702070_group.variants.0.bcf",
+    "results/calls/filtered/filtered_ann/SRR702070_group/some_id/SRR702070_group.variants.0.bcf.csi",
+]
+output = ["results/calls/filtered/SRR702070_group/some_id/SRR702070_group.variants.filtered_ann.bcf"]
+shell = "bcftools concat --output {output} --output-type b -a {input[0]} 2> {log}"
+log = "logs/gather-calls/SRR702070_group/some_id/SRR702070_group.variants.filtered_ann.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: control_fdr (one rule per vartype) ----------------------
+# varlociraptor filter-calls control-fdr --mode local-smart --fdr 0.05
+# with events "present somatic_tumor_high somatic_tumor_medium".
+[[rules]]
+name = "control_fdr_SNV"
+description = "FDR control for SNVs (varlociraptor control-fdr, local-smart, fdr 0.05)"
+input = ["results/calls/filtered/SRR702070_group/some_id/SRR702070_group.variants.filtered_ann.bcf"]
+output = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.SNV.variants.bcf"]
+shell = """
+varlociraptor filter-calls control-fdr {input} --mode local-smart --var SNV \
+  --events present somatic_tumor_high somatic_tumor_medium --fdr 0.05 > {output} 2> {log}
+"""
+log = "logs/control-fdr/SRR702070_group/some_id/SRR702070_group.SNV.variants.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+[[rules]]
+name = "control_fdr_INS"
+description = "FDR control for insertions (varlociraptor control-fdr, local-smart, fdr 0.05)"
+input = ["results/calls/filtered/SRR702070_group/some_id/SRR702070_group.variants.filtered_ann.bcf"]
+output = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.INS.variants.bcf"]
+shell = """
+varlociraptor filter-calls control-fdr {input} --mode local-smart --var INS \
+  --events present somatic_tumor_high somatic_tumor_medium --fdr 0.05 > {output} 2> {log}
+"""
+log = "logs/control-fdr/SRR702070_group/some_id/SRR702070_group.INS.variants.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+[[rules]]
+name = "control_fdr_DEL"
+description = "FDR control for deletions (varlociraptor control-fdr, local-smart, fdr 0.05)"
+input = ["results/calls/filtered/SRR702070_group/some_id/SRR702070_group.variants.filtered_ann.bcf"]
+output = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.DEL.variants.bcf"]
+shell = """
+varlociraptor filter-calls control-fdr {input} --mode local-smart --var DEL \
+  --events present somatic_tumor_high somatic_tumor_medium --fdr 0.05 > {output} 2> {log}
+"""
+log = "logs/control-fdr/SRR702070_group/some_id/SRR702070_group.DEL.variants.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+[[rules]]
+name = "control_fdr_MNV"
+description = "FDR control for MNVs (varlociraptor control-fdr, local-smart, fdr 0.05)"
+input = ["results/calls/filtered/SRR702070_group/some_id/SRR702070_group.variants.filtered_ann.bcf"]
+output = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.MNV.variants.bcf"]
+shell = """
+varlociraptor filter-calls control-fdr {input} --mode local-smart --var MNV \
+  --events present somatic_tumor_high somatic_tumor_medium --fdr 0.05 > {output} 2> {log}
+"""
+log = "logs/control-fdr/SRR702070_group/some_id/SRR702070_group.MNV.variants.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+[[rules]]
+name = "control_fdr_BND"
+description = "FDR control for breakends (varlociraptor control-fdr, local-smart, fdr 0.05)"
+input = ["results/calls/filtered/SRR702070_group/some_id/SRR702070_group.variants.filtered_ann.bcf"]
+output = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.BND.variants.bcf"]
+shell = """
+varlociraptor filter-calls control-fdr {input} --mode local-smart --var BND \
+  --events present somatic_tumor_high somatic_tumor_medium --fdr 0.05 > {output} 2> {log}
+"""
+log = "logs/control-fdr/SRR702070_group/some_id/SRR702070_group.BND.variants.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+[[rules]]
+name = "control_fdr_INV"
+description = "FDR control for inversions (varlociraptor control-fdr, local-smart, fdr 0.05)"
+input = ["results/calls/filtered/SRR702070_group/some_id/SRR702070_group.variants.filtered_ann.bcf"]
+output = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.INV.variants.bcf"]
+shell = """
+varlociraptor filter-calls control-fdr {input} --mode local-smart --var INV \
+  --events present somatic_tumor_high somatic_tumor_medium --fdr 0.05 > {output} 2> {log}
+"""
+log = "logs/control-fdr/SRR702070_group/some_id/SRR702070_group.INV.variants.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+[[rules]]
+name = "control_fdr_DUP"
+description = "FDR control for duplications (varlociraptor control-fdr, local-smart, fdr 0.05)"
+input = ["results/calls/filtered/SRR702070_group/some_id/SRR702070_group.variants.filtered_ann.bcf"]
+output = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.DUP.variants.bcf"]
+shell = """
+varlociraptor filter-calls control-fdr {input} --mode local-smart --var DUP \
+  --events present somatic_tumor_high somatic_tumor_medium --fdr 0.05 > {output} 2> {log}
+"""
+log = "logs/control-fdr/SRR702070_group/some_id/SRR702070_group.DUP.variants.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+[[rules]]
+name = "control_fdr_REP"
+description = "FDR control for repeat expansions (varlociraptor control-fdr, local-smart, fdr 0.05)"
+input = ["results/calls/filtered/SRR702070_group/some_id/SRR702070_group.variants.filtered_ann.bcf"]
+output = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.REP.variants.bcf"]
+shell = """
+varlociraptor filter-calls control-fdr {input} --mode local-smart --var REP \
+  --events present somatic_tumor_high somatic_tumor_medium --fdr 0.05 > {output} 2> {log}
+"""
+log = "logs/control-fdr/SRR702070_group/some_id/SRR702070_group.REP.variants.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+# ---- upstream rule: merge_calls ---------------------------------------------
+# bcftools concat v2.3.2 wrapper (-a) over the 8 vartype-specific callsets.
+[[rules]]
+name = "merge_calls"
+description = "Merge vartype-specific FDR-controlled calls (bcftools concat v2.3.2 wrapper)"
+input = [
+    "results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.SNV.variants.bcf",
+    "results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.INS.variants.bcf",
+    "results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.DEL.variants.bcf",
+    "results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.MNV.variants.bcf",
+    "results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.BND.variants.bcf",
+    "results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.INV.variants.bcf",
+    "results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.DUP.variants.bcf",
+    "results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.REP.variants.bcf",
+    "results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.SNV.variants.bcf.csi",
+    "results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.INS.variants.bcf.csi",
+    "results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.DEL.variants.bcf.csi",
+    "results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.MNV.variants.bcf.csi",
+    "results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.BND.variants.bcf.csi",
+    "results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.INV.variants.bcf.csi",
+    "results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.DUP.variants.bcf.csi",
+    "results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.REP.variants.bcf.csi",
+]
+output = ["results/final-calls/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.bcf"]
+shell = """
+bcftools concat --output {output} --output-type b -a \
+  {input[0]} {input[1]} {input[2]} {input[3]} {input[4]} {input[5]} {input[6]} {input[7]} 2> {log}
+"""
+log = "logs/merge-calls/SRR702070_group/SRR702070_group.some_id.variants.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: convert_phred_scores ------------------------------------
+[[rules]]
+name = "convert_phred_scores"
+description = "Decode phred scores to normal probabilities (varlociraptor decode-phred)"
+input = ["results/final-calls/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.bcf"]
+output = ["results/final-calls/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.normal-probs.bcf"]
+shell = "varlociraptor decode-phred < {input} > {output} 2> {log}"
+log = "logs/convert-phred-scores/SRR702070_group.some_id.variants.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+# ---- upstream rule: bcf_index (annotation-filtered calls) -------------------
+[[rules]]
+name = "bcf_index_filtered"
+description = "Index the annotation-filtered calls (bcftools index v2.6.0 wrapper)"
+input = ["results/calls/filtered/filtered_ann/SRR702070_group/some_id/SRR702070_group.variants.0.bcf"]
+output = ["results/calls/filtered/filtered_ann/SRR702070_group/some_id/SRR702070_group.variants.0.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/filtered_ann/SRR702070_group/some_id/SRR702070_group.variants.0.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: bcf_index (fdr-controlled calls) ------------------------
+[[rules]]
+name = "bcf_index_fdr_SNV"
+description = "Index the FDR-controlled SNV calls (bcftools index v2.6.0 wrapper)"
+input = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.SNV.variants.bcf"]
+output = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.SNV.variants.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/fdr-controlled/SRR702070_group/some_id/SRR702070_group.SNV.variants.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+[[rules]]
+name = "bcf_index_fdr_INS"
+description = "Index the FDR-controlled INS calls (bcftools index v2.6.0 wrapper)"
+input = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.INS.variants.bcf"]
+output = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.INS.variants.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/fdr-controlled/SRR702070_group/some_id/SRR702070_group.INS.variants.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+[[rules]]
+name = "bcf_index_fdr_DEL"
+description = "Index the FDR-controlled DEL calls (bcftools index v2.6.0 wrapper)"
+input = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.DEL.variants.bcf"]
+output = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.DEL.variants.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/fdr-controlled/SRR702070_group/some_id/SRR702070_group.DEL.variants.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+[[rules]]
+name = "bcf_index_fdr_MNV"
+description = "Index the FDR-controlled MNV calls (bcftools index v2.6.0 wrapper)"
+input = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.MNV.variants.bcf"]
+output = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.MNV.variants.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/fdr-controlled/SRR702070_group/some_id/SRR702070_group.MNV.variants.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+[[rules]]
+name = "bcf_index_fdr_BND"
+description = "Index the FDR-controlled BND calls (bcftools index v2.6.0 wrapper)"
+input = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.BND.variants.bcf"]
+output = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.BND.variants.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/fdr-controlled/SRR702070_group/some_id/SRR702070_group.BND.variants.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+[[rules]]
+name = "bcf_index_fdr_INV"
+description = "Index the FDR-controlled INV calls (bcftools index v2.6.0 wrapper)"
+input = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.INV.variants.bcf"]
+output = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.INV.variants.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/fdr-controlled/SRR702070_group/some_id/SRR702070_group.INV.variants.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+[[rules]]
+name = "bcf_index_fdr_DUP"
+description = "Index the FDR-controlled DUP calls (bcftools index v2.6.0 wrapper)"
+input = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.DUP.variants.bcf"]
+output = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.DUP.variants.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/fdr-controlled/SRR702070_group/some_id/SRR702070_group.DUP.variants.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+[[rules]]
+name = "bcf_index_fdr_REP"
+description = "Index the FDR-controlled REP calls (bcftools index v2.6.0 wrapper)"
+input = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.REP.variants.bcf"]
+output = ["results/calls/fdr-controlled/SRR702070_group/some_id/SRR702070_group.REP.variants.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/fdr-controlled/SRR702070_group/some_id/SRR702070_group.REP.variants.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"

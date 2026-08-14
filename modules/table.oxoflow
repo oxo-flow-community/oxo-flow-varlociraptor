@@ -1,0 +1,36 @@
+# Variant table generation (upstream workflow/rules/table.smk).
+#
+# Rule map (upstream rule -> this module):
+#   vembrane_table -> table::vembrane_table
+#
+# Deviations (details in README.md):
+#   * tsv_to_excel is not in the default path (tables.generate_excel is not
+#     requested by rule all; the upstream default config sets it to true, but
+#     the final output only requests it when tables.generate_excel is true —
+#     kept as upstream: generate_excel is not wired into get_final_output).
+#   * The vembrane expression/header are the exact 34 columns produced by
+#     get_vembrane_config with the default config (verified by simulation,
+#     see docs/table-columns.md).
+
+[workflow]
+name = "table"
+
+# ---- upstream rule: vembrane_table ------------------------------------------
+[[rules]]
+name = "vembrane_table"
+description = "Render the variants table with vembrane (vembrane table)"
+input = [
+    "results/final-calls/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.normal-probs.bcf",
+    "results/scenarios/SRR702070_group.yaml",
+]
+output = ["results/tables/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.tsv"]
+shell = """
+vembrane table --wide --header \
+  "symbol, impact, hgvsp, hgvsc, consequence, clinical significance, gnomad genome af, exon, revel, chromosome, position, reference allele, alternative allele, protein position, protein alteration (short), canonical, mane_plus_clinical, prob: absent, prob: artifact, prob: germline_het, prob: germline_hom, prob: somatic_normal, prob: somatic_tumor_high, prob: somatic_tumor_low, prob: somatic_tumor_medium, tumor: allele frequency, tumor: allele frequency distribution, tumor: read depth, tumor: observations, id, gene, hgvsg, feature, end position" \
+  "ANN['SYMBOL'], ANN['IMPACT'], ANN['HGVSp'], ANN['HGVSc'], ANN['Consequence'], ANN['CLIN_SIG'], ANN['gnomADg_AF'], ANN['EXON'].raw, ANN['REVEL'], CHROM, POS, REF, ALT, ANN['Protein_position'].raw, ANN['Amino_acids'], ANN['CANONICAL'], ANN['MANE_PLUS_CLINICAL'], INFO['PROB_ABSENT'], INFO['PROB_ARTIFACT'], INFO['PROB_GERMLINE_HET'], INFO['PROB_GERMLINE_HOM'], INFO['PROB_SOMATIC_NORMAL'], INFO['PROB_SOMATIC_TUMOR_HIGH'], INFO['PROB_SOMATIC_TUMOR_LOW'], INFO['PROB_SOMATIC_TUMOR_MEDIUM'], FORMAT['AF']['tumor'], FORMAT['AFD']['tumor'], FORMAT['DP']['tumor'], FORMAT['OBS']['tumor'], ID, ANN['Gene'], ANN['HGVSg'], ANN['Feature'], INFO['END']" \
+  {input[0]} > {output} 2> {log}
+"""
+log = "logs/vembrane-table/SRR702070_group.some_id.variants.log"
+
+[rules.environment]
+conda = "envs/vembrane.yaml"

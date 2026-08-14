@@ -1,0 +1,8 @@
+# SnpSift — pinned exactly to the upstream envs/snpsift.yaml.
+name: snpsift
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::snpsift=5.1
+  - bioconda::bcftools=1.12

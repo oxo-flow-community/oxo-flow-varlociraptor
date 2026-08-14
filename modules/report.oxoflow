@@ -1,0 +1,144 @@
+# Interactive datavzrd reports (upstream workflow/rules/datavzrd.smk).
+#
+# Rule map (upstream rule -> this module):
+#   process_call_tables    -> report::process_call_tables
+#   bedtools_merge         -> report::bedtools_merge (bedtools intersect v2.6.0 wrapper)
+#   coverage_table         -> report::coverage_table
+#   datavzrd_variants_calls -> report::datavzrd_variants_calls (datavzrd v9.14.0 wrapper)
+#   datavzrd_coverage      -> report::datavzrd_coverage    (datavzrd v9.14.0 wrapper)
+#
+# Deviations (details in README.md):
+#   * prepare_oncoprint runs (its label_sortings directory is a static input
+#     of datavzrd_variants_calls), but with a single group the rendered
+#     template has no oncoprint datasets/views (get_oncoprint returns empty
+#     lists); the directory outputs become marker files.
+#   * process_fusion_call_tables/datavzrd_fusion_calls are not in the default
+#     path (no fusions).
+#   * yte templating is driven by scripts/datavzrd.py with a pre-rendered
+#     variables JSON (datavzrd v9.14.0 wrapper semantics preserved).
+#   * event_desc/labels are the values of the "some_id" event in the upstream
+#     default config.
+
+[workflow]
+name = "report"
+
+# ---- upstream rule: process_call_tables -------------------------------------
+[[rules]]
+name = "process_call_tables"
+description = "Postprocess the variants table (scripts/process-call-tables.py)"
+input = ["results/tables/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.tsv"]
+output = ["results/tables/SRR702070_group/SRR702070_group.some_id.variants.postprocessed.fdr-controlled.tsv"]
+shell = """
+python scripts/process-call-tables.py {input[0]} --output {output} --sorting '[]' --log {log}
+"""
+log = "logs/process_call_tables/SRR702070_group.some_id.log"
+
+[rules.environment]
+conda = "envs/pystats.yaml"
+
+# ---- upstream rule: prepare_oncoprint ---------------------------------------
+# Runs in the default path because datavzrd_variants_calls declares the
+# label_sortings directory as a static input (v6.10.0); with a single group
+# the label sorting loop is a no-op and the variant-oncoprints tables are
+# not referenced by the rendered template.
+[[rules]]
+name = "prepare_oncoprint"
+description = "Prepare gene and variant oncoprint tables (scripts/oncoprint.py)"
+input = ["results/tables/SRR702070_group/SRR702070_group.some_id.variants.postprocessed.fdr-controlled.tsv"]
+output = [
+    "results/tables/oncoprints/all.some_id/gene-oncoprint.tsv",
+    "results/tables/oncoprints/all.some_id/label_sortings/.completed",
+    "results/tables/oncoprints/all.some_id/variant-oncoprints/.completed",
+]
+shell = """
+python scripts/oncoprint.py --calls {input[0]} \
+  --groups '["SRR702070_group"]' \
+  --labels '{"columns": [], "data": []}' \
+  --gene-oncoprint results/tables/oncoprints/all.some_id/gene-oncoprint.tsv \
+  --sortings-dir results/tables/oncoprints/all.some_id/label_sortings \
+  --variants-dir results/tables/oncoprints/all.some_id/variant-oncoprints \
+  --log {log} && \
+touch results/tables/oncoprints/all.some_id/label_sortings/.completed \
+       results/tables/oncoprints/all.some_id/variant-oncoprints/.completed
+"""
+log = "logs/prepare_oncoprint/all.some_id.log"
+
+[rules.environment]
+conda = "envs/pystats.yaml"
+
+# ---- upstream rule: bedtools_merge ------------------------------------------
+# bedtools intersect v2.6.0 wrapper (-wa); temporary file as upstream.
+[[rules]]
+name = "bedtools_merge"
+description = "Intersect sample regions with covered regions (bedtools intersect v2.6.0 wrapper)"
+input = [
+    "results/regions/SRR702070_group/SRR702070.regions.bed.gz",
+    "results/regions/SRR702070_group.covered_regions.bed",
+]
+output = ["results/coverage/SRR702070_group/SRR702070.regions.filtered.bed"]
+temporary = true
+shell = """
+(bedtools intersect -wa -a {input[0]} -b {input[1]} > {output}) 2> {log}
+"""
+log = "logs/bedtools/SRR702070_group/SRR702070.log"
+
+[rules.environment]
+conda = "envs/bedtools.yaml"
+
+# ---- upstream rule: coverage_table ------------------------------------------
+[[rules]]
+name = "coverage_table"
+description = "Build the per-gene coverage table (scripts/coverage_table.py, min cov 5)"
+input = ["results/coverage/SRR702070_group/SRR702070.regions.filtered.bed"]
+output = ["results/coverage/SRR702070_group.csv"]
+shell = """
+python scripts/coverage_table.py {input[0]} --output {output} --min-cov 5 --log {log}
+"""
+log = "logs/coverage/SRR702070_group_coverage_table.log"
+
+[rules.environment]
+conda = "envs/pystats.yaml"
+
+# ---- upstream rule: datavzrd_variants_calls ---------------------------------
+# datavzrd v9.14.0 wrapper. Default target (upstream rule all).
+[[rules]]
+name = "datavzrd_variants_calls"
+description = "Render the interactive variant call report (datavzrd v9.14.0 wrapper)"
+input = [
+    "results/tables/SRR702070_group/SRR702070_group.some_id.variants.postprocessed.fdr-controlled.tsv",
+    "resources/datavzrd/linkouts.js",
+    "resources/datavzrd/variant-calls-template.datavzrd.yaml",
+    "results/tables/oncoprints/all.some_id/label_sortings/.completed",
+]
+output = ["results/datavzrd-report/all.some_id.variants.fdr-controlled/index.html"]
+target = true
+shell = """
+python scripts/datavzrd.py resources/datavzrd/variant-calls-template.datavzrd.yaml \
+  resources/datavzrd/variant-calls.variables.json \
+  --output results/datavzrd-report/all.some_id.variants.fdr-controlled --log {log}
+"""
+log = "logs/datavzrd_report/all.some_id.log"
+
+[rules.environment]
+conda = "envs/datavzrd.yaml"
+
+# ---- upstream rule: datavzrd_coverage ---------------------------------------
+# datavzrd v9.14.0 wrapper. Default target (upstream rule all).
+[[rules]]
+name = "datavzrd_coverage"
+description = "Render the per-gene coverage report (datavzrd v9.14.0 wrapper)"
+input = [
+    "results/coverage/SRR702070_group.csv",
+    "resources/datavzrd/gene-coverage-template.datavzrd.yaml",
+]
+output = ["results/datavzrd-report/SRR702070_group.coverage/index.html"]
+target = true
+shell = """
+python scripts/datavzrd.py resources/datavzrd/gene-coverage-template.datavzrd.yaml \
+  resources/datavzrd/gene-coverage.variables.json \
+  --output results/datavzrd-report/SRR702070_group.coverage --log {log}
+"""
+log = "logs/datavzrd_report/SRR702070_group.coverage.log"
+
+[rules.environment]
+conda = "envs/datavzrd.yaml"

@@ -1,0 +1,208 @@
+# Varlociraptor calling (upstream workflow/rules/calling.smk).
+#
+# Rule map (upstream rule -> this module):
+#   render_scenario          -> calling::render_scenario
+#   varlociraptor_alignment_properties -> calling::varlociraptor_alignment_properties
+#   varlociraptor_preprocess  -> calling::varlociraptor_preprocess_{freebayes,delly}
+#   varlociraptor_call        -> calling::varlociraptor_call_{freebayes,delly}
+#   sort_calls                -> calling::sort_calls_{freebayes,delly}
+#                                (bcftools sort v2.6.0 wrapper, mem 8000)
+#   bcftools_concat           -> calling::bcftools_concat
+#   bcf_index                 -> calling::bcf_index_{freebayes,delly}
+#
+# Deviations (details in README.md):
+#   * render_scenario uses yte upstream; the port copies a pre-rendered
+#     scenario (contamination fraction 0.0 for purity 1.0). The yte template
+#     is kept verbatim at config/scenario.yaml.
+#   * infer_genotypes is false as in the default config, so the call command
+#     writes the raw posterior probabilities ("generic" subcommand).
+#   * scatteritem wildcard frozen to 0 (scatter.calling(16) collapsed).
+
+[workflow]
+name = "calling"
+
+# ---- upstream rule: render_scenario ----------------------------------------
+[[rules]]
+name = "render_scenario"
+description = "Provide the rendered Varlociraptor scenario for the group"
+input = ["resources/scenarios/SRR702070_group.yaml"]
+output = ["results/scenarios/SRR702070_group.yaml"]
+shell = "cp {input} {output}"
+
+# ---- upstream rule: varlociraptor_alignment_properties ---------------------
+[[rules]]
+name = "varlociraptor_alignment_properties"
+description = "Estimate alignment properties (varlociraptor estimate alignment-properties)"
+input = [
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "results/recal/SRR702070.bam",
+]
+output = ["results/alignment-properties/SRR702070_group/SRR702070.json"]
+shell = "varlociraptor estimate alignment-properties {input[0]} --bams {input[1]} > {output} 2> {log}"
+log = "logs/varlociraptor/alignment-properties/SRR702070_group/SRR702070.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+# ---- upstream rule: varlociraptor_preprocess (freebayes) -------------------
+[[rules]]
+name = "varlociraptor_preprocess_freebayes"
+description = "Preprocess observations from freebayes candidates (--max-depth 200)"
+input = [
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+    "results/candidate-calls/freebayes/filtered/SRR702070_group/SRR702070_group.0.bcf",
+    "results/recal/SRR702070.bam",
+    "results/recal/SRR702070.bai",
+    "results/alignment-properties/SRR702070_group/SRR702070.json",
+]
+output = ["results/observations/freebayes/SRR702070_group/SRR702070.0.bcf"]
+shell = """
+varlociraptor preprocess variants --candidates {input[2]} --max-depth 200 \
+  --alignment-properties {input[5]} {input[0]} --bam {input[3]} --output {output} 2> {log}
+"""
+log = "logs/varlociraptor/preprocess/SRR702070_group/SRR702070.freebayes.0.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+# ---- upstream rule: varlociraptor_preprocess (delly) -----------------------
+[[rules]]
+name = "varlociraptor_preprocess_delly"
+description = "Preprocess observations from delly candidates (--max-depth 200)"
+input = [
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+    "results/candidate-calls/delly/filtered/SRR702070_group/SRR702070_group.0.bcf",
+    "results/recal/SRR702070.bam",
+    "results/recal/SRR702070.bai",
+    "results/alignment-properties/SRR702070_group/SRR702070.json",
+]
+output = ["results/observations/delly/SRR702070_group/SRR702070.0.bcf"]
+shell = """
+varlociraptor preprocess variants --candidates {input[2]} --max-depth 200 \
+  --alignment-properties {input[5]} {input[0]} --bam {input[3]} --output {output} 2> {log}
+"""
+log = "logs/varlociraptor/preprocess/SRR702070_group/SRR702070.delly.0.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+# ---- upstream rule: varlociraptor_call (freebayes) -------------------------
+# generic calling, -o /dev/stdout, output redirected (infer_genotypes false).
+[[rules]]
+name = "varlociraptor_call_freebayes"
+description = "Call variants with Varlociraptor from freebayes observations"
+input = [
+    "results/observations/freebayes/SRR702070_group/SRR702070.0.bcf",
+    "results/scenarios/SRR702070_group.yaml",
+]
+output = ["results/calls/varlociraptor/freebayes/SRR702070_group/SRR702070_group.0.unsorted.bcf"]
+shell = """
+(varlociraptor call variants -o /dev/stdout generic \
+  --obs tumor=results/observations/freebayes/SRR702070_group/SRR702070.0.bcf \
+  --scenario {input[1]} > {output}) 2> {log}
+"""
+log = "logs/varlociraptor/call/freebayes/SRR702070_group/SRR702070_group.0.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+# ---- upstream rule: varlociraptor_call (delly) -----------------------------
+[[rules]]
+name = "varlociraptor_call_delly"
+description = "Call variants with Varlociraptor from delly observations"
+input = [
+    "results/observations/delly/SRR702070_group/SRR702070.0.bcf",
+    "results/scenarios/SRR702070_group.yaml",
+]
+output = ["results/calls/varlociraptor/delly/SRR702070_group/SRR702070_group.0.unsorted.bcf"]
+shell = """
+(varlociraptor call variants -o /dev/stdout generic \
+  --obs tumor=results/observations/delly/SRR702070_group/SRR702070.0.bcf \
+  --scenario {input[1]} > {output}) 2> {log}
+"""
+log = "logs/varlociraptor/call/delly/SRR702070_group/SRR702070_group.0.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+# ---- upstream rule: sort_calls (freebayes) ---------------------------------
+# bcftools sort v2.6.0 wrapper (mem_mb 8000).
+[[rules]]
+name = "sort_calls_freebayes"
+description = "Coordinate-sort the freebayes calls (bcftools sort v2.6.0 wrapper)"
+input = ["results/calls/varlociraptor/freebayes/SRR702070_group/SRR702070_group.0.unsorted.bcf"]
+output = ["results/calls/varlociraptor/freebayes/SRR702070_group/SRR702070_group.0.bcf"]
+shell = """
+tmpdir=$(mktemp -d) && \
+bcftools sort --output {output} --output-type b --max-mem 8000M --temp-dir "$tmpdir" {input} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/bcf-sort/SRR702070_group/SRR702070_group.freebayes.0.log"
+
+[rules.resources]
+memory = "8G"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: sort_calls (delly) -------------------------------------
+[[rules]]
+name = "sort_calls_delly"
+description = "Coordinate-sort the delly calls (bcftools sort v2.6.0 wrapper)"
+input = ["results/calls/varlociraptor/delly/SRR702070_group/SRR702070_group.0.unsorted.bcf"]
+output = ["results/calls/varlociraptor/delly/SRR702070_group/SRR702070_group.0.bcf"]
+shell = """
+tmpdir=$(mktemp -d) && \
+bcftools sort --output {output} --output-type b --max-mem 8000M --temp-dir "$tmpdir" {input} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/bcf-sort/SRR702070_group/SRR702070_group.delly.0.log"
+
+[rules.resources]
+memory = "8G"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: bcf_index (varlociraptor calls) ------------------------
+[[rules]]
+name = "bcf_index_freebayes"
+description = "Index the sorted freebayes calls (bcftools index)"
+input = ["results/calls/varlociraptor/freebayes/SRR702070_group/SRR702070_group.0.bcf"]
+output = ["results/calls/varlociraptor/freebayes/SRR702070_group/SRR702070_group.0.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/calls/varlociraptor/freebayes.SRR702070_group.0.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+[[rules]]
+name = "bcf_index_delly"
+description = "Index the sorted delly calls (bcftools index)"
+input = ["results/calls/varlociraptor/delly/SRR702070_group/SRR702070_group.0.bcf"]
+output = ["results/calls/varlociraptor/delly/SRR702070_group/SRR702070_group.0.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/calls/varlociraptor/delly.SRR702070_group.0.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: bcftools_concat ----------------------------------------
+# bcftools concat v2.3.2 wrapper (extra -a): merge freebayes + delly calls.
+[[rules]]
+name = "bcftools_concat"
+description = "Merge freebayes and delly calls (bcftools concat v2.3.2 wrapper)"
+input = [
+    "results/calls/varlociraptor/freebayes/SRR702070_group/SRR702070_group.0.bcf",
+    "results/calls/varlociraptor/delly/SRR702070_group/SRR702070_group.0.bcf",
+    "results/calls/varlociraptor/freebayes/SRR702070_group/SRR702070_group.0.bcf.csi",
+    "results/calls/varlociraptor/delly/SRR702070_group/SRR702070_group.0.bcf.csi",
+]
+output = ["results/calls/varlociraptor/SRR702070_group/SRR702070_group.variants.0.bcf"]
+shell = "bcftools concat --output {output} --output-type b -a {input[0]} {input[1]} 2> {log}"
+log = "logs/concat-calls/SRR702070_group/SRR702070_group.variants.0.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"

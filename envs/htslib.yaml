@@ -1,0 +1,8 @@
+# htslib + unzip — pinned exactly to the upstream envs/htslib.yaml.
+name: htslib
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::htslib=1.12
+  - conda-forge::unzip=6.0

@@ -1,0 +1,7 @@
+# FastQC — pinned to the fastqc v2.10.0 wrapper environment.
+name: fastqc
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::fastqc=0.12.1

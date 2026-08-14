@@ -1,0 +1,11 @@
+{
+  "params": {
+    "samples": ["SRR702070"]
+  },
+  "wildcards": {
+    "group": "SRR702070_group"
+  },
+  "input": {
+    "csv": "results/coverage/SRR702070_group.csv"
+  }
+}

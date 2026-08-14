@@ -1,0 +1,211 @@
+# Candidate calling (upstream workflow/rules/candidate_calling.smk).
+#
+# Rule map (upstream rule -> this module):
+#   freebayes        -> candidate_calling::freebayes   (freebayes v2.7.0 wrapper)
+#   delly            -> candidate_calling::delly       (delly v2.3.2 wrapper)
+#   fix_delly_calls  -> candidate_calling::fix_delly_calls
+#   scatter_candidates -> candidate_calling::scatter_candidates_{freebayes,delly}
+#                         (rbt vcf-split; scatter.calling(16) collapsed to 1 chunk)
+#   annotate_candidate_variants -> candidate_calling::annotate_candidate_variants_{freebayes,delly}
+#                                  (vep annotate v8.0.0 wrapper)
+#   filter_candidates_by_annotation -> candidate_calling::filter_candidates_by_annotation_{freebayes,delly}
+#
+# filter_offtarget_variants is not in the default path (no target_regions in
+# config) — as upstream.
+
+[workflow]
+name = "candidate_calling"
+
+# ---- upstream rule: freebayes ----------------------------------------------
+# freebayes v2.7.0 wrapper (96 threads; --pooled-continuous
+# --min-alternate-count 2 --min-alternate-fraction 0.05; region chunks of
+# 100 kb intersected with the expanded filtered regions).
+[[rules]]
+name = "freebayes"
+description = "Call candidate variants with freebayes (freebayes v2.7.0 wrapper)"
+input = [
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+    "results/regions/SRR702070_group.expanded_regions.filtered.bed",
+    "results/recal/SRR702070.bam",
+    "results/recal/SRR702070.bai",
+]
+output = ["results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.bcf"]
+shell = '''
+tmpdir=$(mktemp -d) && \
+(freebayes-parallel <(bedtools intersect -a <(sed 's:\([0-9]*\)-\([0-9]*\)$/\t\1\t\2/' <(fasta_generate_regions.py {input[1]} 100000)) -b {input[2]} | sed 's/\t\([0-9]*\)\t\([0-9]*\)$/:\1-\2/') 96 \
+  --fasta-reference {input[0]} --pooled-continuous --min-alternate-count 2 --min-alternate-fraction 0.05 {input[3]} \
+  | bcftools sort --max-mem 205M --temp-dir "$tmpdir" \
+  | bcftools view --threads 95 --output {output} --output-type b) 2> {log} && \
+rm -rf "$tmpdir"
+'''
+log = "logs/freebayes/SRR702070_group.log"
+
+[rules.resources]
+threads = 96
+
+[rules.environment]
+conda = "envs/freebayes.yaml"
+
+# ---- upstream rule: delly --------------------------------------------------
+# delly v2.3.2 wrapper (threads = number of samples = 1).
+[[rules]]
+name = "delly"
+description = "Call structural variant candidates with delly (delly v2.3.2 wrapper)"
+input = [
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+    "results/recal/SRR702070.bam",
+    "results/recal/SRR702070.bai",
+    "results/regions/human.hg38.delly_excluded.bed",
+]
+output = ["results/candidate-calls/delly/SRR702070_group/SRR702070_group.bcf"]
+shell = """
+(OMP_NUM_THREADS=1 delly call -g {input[0]} -x {input[4]} {input[2]} \
+ | bcftools view --output {output} --output-type b) 2> {log}
+"""
+log = "logs/delly/SRR702070_group.log"
+
+[rules.resources]
+threads = 1
+
+[rules.environment]
+conda = "envs/delly.yaml"
+
+# ---- upstream rule: fix_delly_calls ----------------------------------------
+# BND records would lead to invalid BCFs after VEP annotation (invalid RLEN).
+[[rules]]
+name = "fix_delly_calls"
+description = "Remove delly BND breakends (invalid after VEP annotation)"
+input = ["results/candidate-calls/delly/SRR702070_group/SRR702070_group.bcf"]
+output = ["results/candidate-calls/delly/SRR702070_group/SRR702070_group.no_bnds.bcf"]
+shell = """
+bcftools view -e 'INFO/SVTYPE="BND"' {input} -Ob > {output} 2> {log}
+"""
+log = "logs/fix_delly_calls/SRR702070_group.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: scatter_candidates (freebayes) -------------------------
+# rbt vcf-split with a single output chunk (upstream scatter.calling(16)
+# collapsed to scatteritem=0; command is byte-identical).
+[[rules]]
+name = "scatter_candidates_freebayes"
+description = "Split candidate VCF into calling chunks with rbt vcf-split (1 chunk)"
+input = ["results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.bcf"]
+output = ["results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.0.bcf"]
+shell = "rbt vcf-split {input} {output} 2> {log}"
+log = "logs/scatter-candidates/freebayes/SRR702070_group/SRR702070_group.log"
+
+[rules.environment]
+conda = "envs/rbt.yaml"
+
+# ---- upstream rule: scatter_candidates (delly) -----------------------------
+[[rules]]
+name = "scatter_candidates_delly"
+description = "Split candidate VCF into calling chunks with rbt vcf-split (1 chunk)"
+input = ["results/candidate-calls/delly/SRR702070_group/SRR702070_group.no_bnds.bcf"]
+output = ["results/candidate-calls/delly/SRR702070_group/SRR702070_group.0.bcf"]
+shell = "rbt vcf-split {input} {output} 2> {log}"
+log = "logs/scatter-candidates/delly/SRR702070_group/SRR702070_group.log"
+
+[rules.environment]
+conda = "envs/rbt.yaml"
+
+# ---- upstream rule: annotate_candidate_variants (freebayes) ----------------
+# vep annotate v8.0.0 wrapper (4 threads, extra "--af_gnomade --vcf_info_field
+# ANN ", no plugins).
+[[rules]]
+name = "annotate_candidate_variants_freebayes"
+description = "Annotate freebayes candidates with VEP (vep annotate v8.0.0 wrapper)"
+input = [
+    "results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.0.bcf",
+    "resources/vep/cache/.cache_complete",
+    "resources/vep/plugins/.plugins_complete",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+]
+output = [
+    "results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.0.annotated.bcf",
+    "results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.0.stats.html",
+]
+shell = """
+(bcftools view '{input[0]}' | \
+ vep --af_gnomade --vcf_info_field ANN --fork 4 --format vcf --vcf \
+   --offline --cache --dir_cache resources/vep/cache --cache_version 111 \
+   --species homo_sapiens --assembly GRCh38 \
+   --fasta {input[3]} --dir_plugins resources/vep/plugins \
+   --output_file STDOUT --stats_file {output[1]} \
+ | bcftools view -Ob > {output[0]}) 2> {log}
+"""
+log = "logs/vep/freebayes/SRR702070_group/SRR702070_group.0.annotate_candidates.log"
+
+[rules.resources]
+threads = 4
+
+[rules.environment]
+conda = "envs/vep.yaml"
+
+# ---- upstream rule: annotate_candidate_variants (delly) --------------------
+[[rules]]
+name = "annotate_candidate_variants_delly"
+description = "Annotate delly candidates with VEP (vep annotate v8.0.0 wrapper)"
+input = [
+    "results/candidate-calls/delly/SRR702070_group/SRR702070_group.0.bcf",
+    "resources/vep/cache/.cache_complete",
+    "resources/vep/plugins/.plugins_complete",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+]
+output = [
+    "results/candidate-calls/delly/SRR702070_group/SRR702070_group.0.annotated.bcf",
+    "results/candidate-calls/delly/SRR702070_group/SRR702070_group.0.stats.html",
+]
+shell = """
+(bcftools view '{input[0]}' | \
+ vep --af_gnomade --vcf_info_field ANN --fork 4 --format vcf --vcf \
+   --offline --cache --dir_cache resources/vep/cache --cache_version 111 \
+   --species homo_sapiens --assembly GRCh38 \
+   --fasta {input[3]} --dir_plugins resources/vep/plugins \
+   --output_file STDOUT --stats_file {output[1]} \
+ | bcftools view -Ob > {output[0]}) 2> {log}
+"""
+log = "logs/vep/delly/SRR702070_group/SRR702070_group.0.annotate_candidates.log"
+
+[rules.resources]
+threads = 4
+
+[rules.environment]
+conda = "envs/vep.yaml"
+
+# ---- upstream rule: filter_candidates_by_annotation (freebayes) ------------
+# Candidates filter "'MODERATE' in ANN['IMPACT']" (no aux files).
+[[rules]]
+name = "filter_candidates_by_annotation_freebayes"
+description = "Keep MODERATE/HIGH-impact freebayes candidates (vembrane filter)"
+input = ["results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.0.annotated.bcf"]
+output = ["results/candidate-calls/freebayes/filtered/SRR702070_group/SRR702070_group.0.bcf"]
+shell = """
+(bcftools norm -Ou --do-not-normalize --multiallelics -any {input} | \
+ vembrane filter "'MODERATE' in ANN['IMPACT']" | bcftools sort -Ob > {output}) 2> {log}
+"""
+log = "logs/filter-calls/annotation/freebayes/SRR702070_group/SRR702070_group.0.log"
+
+[rules.environment]
+conda = "envs/vembrane.yaml"
+
+# ---- upstream rule: filter_candidates_by_annotation (delly) ----------------
+[[rules]]
+name = "filter_candidates_by_annotation_delly"
+description = "Keep MODERATE/HIGH-impact delly candidates (vembrane filter)"
+input = ["results/candidate-calls/delly/SRR702070_group/SRR702070_group.0.annotated.bcf"]
+output = ["results/candidate-calls/delly/filtered/SRR702070_group/SRR702070_group.0.bcf"]
+shell = """
+(bcftools norm -Ou --do-not-normalize --multiallelics -any {input} | \
+ vembrane filter "'MODERATE' in ANN['IMPACT']" | bcftools sort -Ob > {output}) 2> {log}
+"""
+log = "logs/filter-calls/annotation/delly/SRR702070_group/SRR702070_group.0.log"
+
+[rules.environment]
+conda = "envs/vembrane.yaml"

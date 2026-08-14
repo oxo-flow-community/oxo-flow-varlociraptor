@@ -1,0 +1,9 @@
+# Varlociraptor — pinned exactly to the upstream envs/varlociraptor.yaml.
+name: varlociraptor
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::varlociraptor=8.9.5
+  - bioconda::vega-lite-cli=5.16
+  - bioconda::bcftools=1.21

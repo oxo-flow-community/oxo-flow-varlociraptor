@@ -1,0 +1,273 @@
+"""Prepare gene and variant oncoprint tables for datavzrd.
+
+Port of the upstream workflow/scripts/oncoprint.py (MIT, snakemake-workflows
+dna-seq-varlociraptor v6.10.0), adapted to a plain argv interface:
+  oncoprint.py --calls TABLE.tsv --groups '["G"]' --labels '{"columns": [...], "data": [...]}'
+    --gene-oncoprint OUT.tsv --sortings-dir DIR --variants-dir DIR --log LOG
+
+With the default single-group configuration the label sortings loop is a no-op
+and the sortings directory is still created (as upstream).
+"""
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from sklearn.feature_selection import chi2
+from statsmodels.stats.multitest import fdrcorrection
+from statsmodels.stats.nonparametric import rank_compare_2indep
+
+
+def join_group_hgvsgs(df):
+    hgvsgs = ",".join(np.sort(pd.unique(df["hgvsg"].str.split(",").explode())))
+    df.loc[:, "hgvsg"] = hgvsgs
+    return df.drop_duplicates()
+
+
+def join_group_consequences(df):
+    consequences = ",".join(
+        np.sort(pd.unique(df["consequence"].str.split(",").explode()))
+    )
+    df.loc[:, "consequence"] = consequences
+    return df
+
+
+def join_gene_vartypes(df):
+    vartypes = ",".join(pd.unique(df["vartype"]))
+    df = df.iloc[:1]
+    df.loc[:, "vartype"] = vartypes
+    return df
+
+
+def load_calls(path, group):
+    calls = pd.read_csv(
+        path,
+        sep="\t",
+        usecols=["symbol", "vartype", "hgvsp", "hgvsc", "hgvsg", "consequence"],
+    )
+    calls["group"] = group
+    calls.loc[:, "consequence"] = calls["consequence"].str.replace("&", ",")
+    return calls.drop_duplicates()
+
+
+def load_group_annotation(groups):
+    # upstream: optional group_annotation table, not configured by default
+    group_annotation = pd.DataFrame({"group": groups}).set_index("group")
+    group_annotation = group_annotation.T
+    group_annotation.index.name = "annotation"
+    return group_annotation
+
+
+def sort_by_recurrence(matrix, no_occurence_check_func):
+    matrix["nocalls"] = no_occurence_check_func(matrix).sum(axis="columns")
+    matrix = matrix.sort_values("nocalls", ascending=True).drop(
+        labels=["nocalls"], axis="columns"
+    )
+    return matrix
+
+
+def add_missing_groups(matrix, groups, index_mate):
+    for group in groups:
+        if (index_mate, group) not in matrix.columns:
+            matrix[(index_mate, group)] = pd.NA
+    return matrix
+
+
+def attach_group_annotation(matrix, group_annotation):
+    index_cols = matrix.index.names
+    return (
+        pd.concat([group_annotation.reset_index(drop=True), matrix.reset_index()])
+        .set_index(index_cols)
+        .reset_index()
+    )
+
+
+def gene_oncoprint(calls, groups):
+    calls = calls[["group", "symbol", "vartype", "consequence"]]
+    if not calls.empty:
+        grouped = (
+            calls.drop_duplicates()
+            .groupby(["symbol"], observed=False)
+            .apply(join_group_consequences)
+        ).reset_index(drop=True)
+        grouped = (
+            grouped.drop_duplicates()
+            .groupby(["group", "symbol"], observed=False)
+            .apply(join_gene_vartypes)
+        )
+        matrix = grouped.set_index(["symbol", "consequence", "group"]).unstack(
+            level="group"
+        )
+        matrix = add_missing_groups(matrix, groups, "vartype")
+        matrix.columns = matrix.columns.droplevel(0)  # remove superfluous header
+        if len(matrix.columns) > 1:
+            # sort by recurrence
+            matrix = sort_by_recurrence(matrix, lambda matrix: matrix.isna())
+
+        return matrix
+    else:
+        cols = ["symbol", "consequence"] + list(groups)
+        return pd.DataFrame({col: [] for col in cols}).set_index(list(groups))
+
+
+def variant_oncoprint(gene_calls, group_annotation, groups):
+    gene_calls = gene_calls[["group", "hgvsp", "hgvsc", "hgvsg", "consequence"]]
+    gene_calls.loc[:, "exists"] = "+"
+
+    gene_calls = gene_calls.drop_duplicates()
+    is_protein_impact = ~gene_calls["hgvsp"].isna()
+    gene_calls.loc[~is_protein_impact, "id"] = gene_calls.loc[
+        ~is_protein_impact, "hgvsg"
+    ]
+    gene_calls.loc[is_protein_impact, "id"] = gene_calls.loc[is_protein_impact, "hgvsp"]
+    grouped = (
+        gene_calls.drop_duplicates()
+        .groupby(["id"], observed=False)
+        .apply(join_group_hgvsgs)
+        .drop(["id"], axis="columns")
+    )
+    matrix = grouped.set_index(
+        ["hgvsp", "hgvsc", "hgvsg", "consequence", "group"]
+    ).unstack(level="group")
+
+    matrix = add_missing_groups(matrix, groups, "exists")
+    matrix.columns = matrix.columns.droplevel(0)  # remove superfluous header
+
+    if len(matrix.columns) > 1:
+        # sort by recurrence
+        matrix = sort_by_recurrence(matrix, lambda matrix: matrix.isna())
+
+    matrix = attach_group_annotation(matrix, group_annotation)
+
+    return matrix
+
+
+def store(data, output, labels_df, label_idx=None):
+    _labels_df = labels_df
+    if label_idx is not None:
+        _labels_df = labels_df.iloc[[label_idx]]
+
+    # add labels
+    index_cols = data.index.names
+    cols = data.columns
+    data = pd.concat([_labels_df, data.reset_index()]).set_index(index_cols)
+    # restore column order
+    data = data[cols]
+
+    data.to_csv(output, sep="\t", float_format="{:.2g}".format)
+
+
+def sort_oncoprint_labels(data, labels_df, sortings_dir, groups):
+    labels = labels_df.index
+
+    for label_idx, label in enumerate(labels):
+        outdata = data
+        if not data.empty:
+            feature_matrix = data.reset_index(drop=True).T.copy()
+            feature_matrix[~pd.isna(feature_matrix)] = True
+            feature_matrix[pd.isna(feature_matrix)] = False
+            feature_matrix = feature_matrix.astype(bool)
+
+            # target vector: label values, converted into factors
+            target_vector = labels_df.loc[label]
+            # ignore any NA in the target vector and correspondingly remove the rows in the feature matrix
+            # infer_objects ensures that all values are interpreted by the best fitting type (e.g. float)
+            not_na_target_vector = target_vector[
+                ~pd.isna(target_vector)
+            ].infer_objects()
+
+            target_is_numeric = pd.api.types.is_numeric_dtype(not_na_target_vector)
+            if target_is_numeric:
+                not_na_target_vector = not_na_target_vector.astype(float)
+            else:
+                not_na_target_vector = not_na_target_vector.astype("category")
+            feature_matrix = feature_matrix.loc[not_na_target_vector.index]
+
+            if target_is_numeric:
+                # partition target vector by each row of the (binary) feature_matrix
+                # perform Brunner-Munzel test for each feature row and collect p-values
+
+                def test_independence(feature_matrix_row):
+                    group1 = not_na_target_vector[feature_matrix_row]
+                    group2 = not_na_target_vector[~feature_matrix_row]
+                    if len(group1) > 7 and len(group2) > 7:
+                        pval = rank_compare_2indep(group1, group2, use_t=False).pvalue
+                    else:
+                        pval = 1.0  # if one of the groups is too small, we cannot perform the test, so we assign a non-significant p-value
+                    if np.isnan(pval):
+                        pval = 1.0  # if the test fails for some reason (e.g. all values are identical), we assign a non-significant p-value
+                    return pval
+
+                pvals = feature_matrix.apply(test_independence, axis="rows").values
+            else:
+                _, pvals = chi2(feature_matrix, not_na_target_vector)
+            sorted_idx = np.argsort(pvals)
+
+            _, fdr = fdrcorrection(pvals)
+
+            # clone data
+            sorted_data = data.copy(deep=True)
+
+            # sort by label
+            sorted_target_vector = target_vector.sort_values()
+            sorted_data = sorted_data[sorted_target_vector.index]
+
+            # add mutual information
+            sorted_data.insert(0, "FDR dependency", fdr)
+            sorted_data.insert(0, "p-value dependency", pvals)
+
+            outdata = sorted_data.iloc[sorted_idx]
+        outpath = os.path.join(sortings_dir, f"{label}.tsv")
+        store(outdata, outpath, labels_df, label_idx=label_idx)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--calls", nargs="+", required=True, help="Postprocessed calls TSVs")
+    parser.add_argument("--groups", required=True, help="JSON list of group names")
+    parser.add_argument("--labels", required=True, help="JSON-encoded labels DataFrame")
+    parser.add_argument("--gene-oncoprint", required=True, help="Output gene oncoprint TSV")
+    parser.add_argument("--sortings-dir", required=True, help="Output label sortings directory")
+    parser.add_argument("--variants-dir", required=True, help="Output variant oncoprints directory")
+    parser.add_argument("--log", required=True, help="Log file (stderr redirect)")
+    args = parser.parse_args()
+
+    if args.log:
+        sys.stderr = open(args.log, "w")
+
+    groups = json.loads(args.groups)
+    labels_data = json.loads(args.labels)
+    labels_df = pd.DataFrame(
+        labels_data["data"], columns=labels_data["columns"]
+    ).set_index(labels_data.get("index", labels_data["columns"][:1]))
+
+    calls = pd.concat(
+        [
+            load_calls(path, sample)
+            for path, sample in zip(args.calls, groups)
+        ]
+    )
+
+    gene_oncoprint_df = gene_oncoprint(calls, groups)
+
+    group_annotation = load_group_annotation(groups)
+    gene_oncoprint_main = attach_group_annotation(gene_oncoprint_df, group_annotation)
+    gene_oncoprint_main.to_csv(args.gene_oncoprint, sep="\t", index=False)
+
+    os.makedirs(args.sortings_dir, exist_ok=True)
+
+    sort_oncoprint_labels(gene_oncoprint_df, labels_df, args.sortings_dir, groups)
+
+    os.makedirs(args.variants_dir, exist_ok=True)
+    for gene, gene_calls in calls.groupby("symbol", observed=False):
+        variant_oncoprint(gene_calls, group_annotation, groups).to_csv(
+            Path(args.variants_dir) / f"{gene}.tsv", sep="\t", index=False
+        )
+
+
+if __name__ == "__main__":
+    main()

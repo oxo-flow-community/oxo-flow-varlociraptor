@@ -1,0 +1,7 @@
+# mosdepth — pinned exactly to the upstream envs/mosdepth.yaml.
+name: mosdepth
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::mosdepth=0.2.9

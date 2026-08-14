@@ -1,0 +1,8 @@
+# VEP — pinned to the vep annotate v8.0.0 wrapper environment.
+name: vep
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::ensembl-vep=115.2
+  - bioconda::bcftools=1.21

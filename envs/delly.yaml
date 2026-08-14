@@ -1,0 +1,8 @@
+# delly — pinned to the delly v2.3.2 wrapper environment.
+name: delly
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::delly=1.1.6
+  - bioconda::bcftools=1.17

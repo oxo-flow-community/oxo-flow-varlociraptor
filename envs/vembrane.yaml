@@ -1,0 +1,8 @@
+# vembrane — pinned exactly to the upstream envs/vembrane.yaml.
+name: vembrane
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::vembrane=2.4.0
+  - bioconda::bcftools=1.22

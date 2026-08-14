@@ -1,0 +1,77 @@
+# oxo-flow-varlociraptor
+#
+# Small and structural variant calling with Varlociraptor.
+# oxo-flow port of snakemake-workflows/dna-seq-varlociraptor v6.10.0
+# (https://github.com/snakemake-workflows/dna-seq-varlociraptor, MIT).
+#
+# Scope: the default-parameter execution path for one tumor sample group
+# ("SRR702070_group", sample "SRR702070") — pangenome (vg giraffe) mapping,
+# freebayes + delly candidate calling, Varlociraptor calling with scenario
+# "some_id" (present + somatic_tumor_high + somatic_tumor_medium events),
+# FDR control over 8 variant types, VEP annotation, and the datavzrd report.
+# Rule-level fidelity notes (upstream rule -> ported rule) live in the module
+# files; deviations are summarized in README.md and metadata.json.
+#
+# Upstream scatter.calling(16) is collapsed to a single chunk (scatteritem=0);
+# all "results/..." paths follow the upstream layout so commands are
+# byte-identical to the snakemake-wrappers ports used upstream.
+
+[workflow]
+name = "oxo-flow-varlociraptor"
+description = "Small and structural variant calling with Varlociraptor (port of snakemake-workflows/dna-seq-varlociraptor v6.10.0)"
+[config]
+# Path to the raw paired-end FASTQs of the single sample (upstream
+# config/units.tsv points at absolute /projects/... paths; the port reads
+# from the repository fixtures instead).
+reads_dir = "test/fixtures/raw"
+
+# ---------------------------------------------------------------------------
+# Sample groups (upstream config/samples.tsv: SRR702070 -> SRR702070_group,
+# alias "tumor", platform ILLUMINA, purity 1.0, datatype dna, calling variants)
+# ---------------------------------------------------------------------------
+[[sample_groups]]
+name = "SRR702070_group"
+samples = ["SRR702070"]
+
+# ---------------------------------------------------------------------------
+# Modules (rule names are namespaced as <namespace>::<rule_name>)
+# ---------------------------------------------------------------------------
+[[include]]
+path = "modules/ref.oxoflow"
+namespace = "ref"
+
+[[include]]
+path = "modules/mapping.oxoflow"
+namespace = "mapping"
+
+[[include]]
+path = "modules/qc.oxoflow"
+namespace = "qc"
+
+[[include]]
+path = "modules/regions.oxoflow"
+namespace = "regions"
+
+[[include]]
+path = "modules/candidate_calling.oxoflow"
+namespace = "candidate_calling"
+
+[[include]]
+path = "modules/calling.oxoflow"
+namespace = "calling"
+
+[[include]]
+path = "modules/annotation.oxoflow"
+namespace = "annotation"
+
+[[include]]
+path = "modules/filtering.oxoflow"
+namespace = "filtering"
+
+[[include]]
+path = "modules/table.oxoflow"
+namespace = "table"
+
+[[include]]
+path = "modules/report.oxoflow"
+namespace = "report"

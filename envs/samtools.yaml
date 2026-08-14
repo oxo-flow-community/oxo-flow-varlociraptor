@@ -1,0 +1,8 @@
+# samtools — pinned exactly to the upstream envs/samtools.yaml.
+name: samtools
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::samtools=1.21
+  - conda-forge::sed=4.8

@@ -1,0 +1,8 @@
+# bedtools + samtools — pinned exactly to the upstream envs/bedtools.yaml.
+name: bedtools
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::bedtools=2.29
+  - bioconda::samtools=1.12

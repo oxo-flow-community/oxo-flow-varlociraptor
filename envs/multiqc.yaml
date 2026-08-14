@@ -1,0 +1,7 @@
+# MultiQC — pinned to the multiqc v9.9.0 wrapper environment.
+name: multiqc
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::multiqc=1.35

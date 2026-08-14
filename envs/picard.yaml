@@ -1,0 +1,8 @@
+# picard — pinned to the picard markduplicates v2.5.0 wrapper environment.
+name: picard
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::picard=3.0.0
+  - bioconda::samtools=1.17

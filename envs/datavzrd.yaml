@@ -1,0 +1,12 @@
+# datavzrd + yte — pinned to the datavzrd v9.14.0 wrapper environment.
+name: datavzrd
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::datavzrd=2.70.0
+  - conda-forge::yte
+  - conda-forge::numpy
+  - conda-forge::pandas
+  - conda-forge::polars
+  - conda-forge::python=3.12

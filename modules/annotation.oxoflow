@@ -1,0 +1,97 @@
+# Final call annotation (upstream workflow/rules/annotation.smk).
+#
+# Rule map (upstream rule -> this module):
+#   annotate_variants   -> annotation::annotate_variants
+#                          (vep annotate v8.0.0 wrapper, final_calls config:
+#                           --everything --check_existing --vcf_info_field ANN
+#                           --hgvsg, plugins LoFtool + REVEL)
+#   annotate_vcfs       -> annotation::annotate_vcfs
+#   bcf_index           -> annotation::bcf_index_vep_annotated
+#                          (bcftools index v2.6.0 wrapper)
+#
+# Deviations (details in README.md):
+#   * gather_annotated_calls is not in the default path: benchmarking is not
+#     activated and the some_id event defines filters, so control_fdr reads
+#     the filtered calls instead of results/final-calls/*.annotated.bcf.
+#   * annotate_dgidb is not in the default path (dgidb not activated).
+#   * Candidate VEP inputs (revel) are passed as in the upstream input
+#     function get_plugin_aux; the stats.html output is kept byte-identical.
+
+[workflow]
+name = "annotation"
+
+# ---- upstream rule: annotate_variants --------------------------------------
+# vep annotate v8.0.0 wrapper (4 threads; extra from config
+# annotations/vep/final_calls).
+[[rules]]
+name = "annotate_variants"
+description = "Annotate final calls with VEP (--everything --check_existing --hgvsg, LoFtool + REVEL plugins)"
+input = [
+    "results/calls/varlociraptor/SRR702070_group/SRR702070_group.variants.0.bcf",
+    "resources/vep/cache/.cache_complete",
+    "resources/vep/plugins/.plugins_complete",
+    "resources/revel_scores.tsv.gz",
+    "resources/revel_scores.tsv.gz.tbi",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+]
+output = [
+    "results/calls/vep_annotated/SRR702070_group/SRR702070_group.variants.0.bcf",
+    "results/calls/vep_annotated/SRR702070_group/SRR702070_group.variants.0.stats.html",
+]
+shell = """
+(bcftools view '{input[0]}' | \
+ vep --everything --check_existing --vcf_info_field ANN --hgvsg --fork 4 \
+   --format vcf --vcf --offline --cache --dir_cache resources/vep/cache \
+   --cache_version 111 --species homo_sapiens --assembly GRCh38 \
+   --fasta {input[5]} --dir_plugins resources/vep/plugins \
+   --plugin LoFtool,resources/vep/plugins/LoFtool_scores.txt \
+   --plugin REVEL,resources/revel_scores.tsv.gz \
+   --output_file STDOUT --stats_file {output[1]} \
+ | bcftools view -Ob > {output[0]}) 2> {log}
+"""
+log = "logs/vep/SRR702070_group.variants.0.annotate.log"
+
+[rules.resources]
+threads = 4
+
+[rules.environment]
+conda = "envs/vep.yaml"
+
+# ---- upstream rule: annotate_vcfs ------------------------------------------
+# SnpSift annotate with known variants (resources/variation.vcf.gz).
+[[rules]]
+name = "annotate_vcfs"
+description = "Annotate VEP-annotated calls with known variants (SnpSift annotate)"
+input = [
+    "results/calls/vep_annotated/SRR702070_group/SRR702070_group.variants.0.bcf",
+    "results/calls/vep_annotated/SRR702070_group/SRR702070_group.variants.0.bcf.csi",
+    "resources/variation.vcf.gz",
+    "resources/variation.vcf.gz.tbi",
+]
+output = ["results/calls/db_annotated/SRR702070_group/SRR702070_group.variants.0.bcf"]
+shell = """
+(bcftools view --threads 4 {input[0]} \
+ | SnpSift annotate -name 'known_' resources/variation.vcf.gz /dev/stdin \
+ | bcftools view --threads 4 -Ob > {output}) 2> {log}
+"""
+log = "logs/annotate-vcfs/SRR702070_group/SRR702070_group.variants.0.log"
+
+[rules.resources]
+threads = 4
+
+[rules.environment]
+conda = "envs/snpsift.yaml"
+
+# ---- upstream rule: bcf_index (vep-annotated calls) ------------------------
+# Index of the VEP-annotated calls, required by annotate_vcfs.
+[[rules]]
+name = "bcf_index_vep_annotated"
+description = "Index the VEP-annotated calls (bcftools index v2.6.0 wrapper)"
+input = ["results/calls/vep_annotated/SRR702070_group/SRR702070_group.variants.0.bcf"]
+output = ["results/calls/vep_annotated/SRR702070_group/SRR702070_group.variants.0.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/calls/vep_annotated/SRR702070_group/SRR702070_group.variants.0.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"

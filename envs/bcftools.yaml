@@ -1,0 +1,7 @@
+# bcftools — pinned exactly to the upstream envs/bcftools.yaml.
+name: bcftools
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::bcftools=1.19

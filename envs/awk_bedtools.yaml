@@ -1,0 +1,10 @@
+# bedtools + gawk + samtools — pinned exactly to the upstream
+# envs/awk_bedtools.yaml.
+name: awk_bedtools
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::bedtools=2.30
+  - conda-forge::gawk=5.1
+  - bioconda::samtools=1.15

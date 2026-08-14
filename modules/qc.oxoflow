@@ -1,0 +1,116 @@
+# Read QC (upstream workflow/rules/qc.smk).
+#
+# Rule map (upstream rule -> this module):
+#   fastqc          -> qc::fastqc_{r1,r2}   (fastqc v2.10.0 wrapper; unit wildcard
+#                                            "lane1" and fq wildcards fq1/fq2 frozen)
+#   samtools_idxstats -> qc::samtools_idxstats (samtools idxstats v9.15.0 wrapper)
+#   samtools_stats  -> qc::samtools_stats     (samtools stats v9.15.0 wrapper)
+#   multiqc         -> qc::multiqc            (multiqc v9.9.0 wrapper)
+#
+# Upstream file names are kept byte-identical so MultiQC input resolution
+# matches: results/qc/fastqc/{sample}/lane1.fq1_fastqc.zip etc.
+
+[workflow]
+name = "qc"
+
+# ---- upstream rule: fastqc (R1) --------------------------------------------
+# fastqc v2.10.0 wrapper (1 thread, 1024 MiB -> --memory 1024); outputs are
+# moved out of the temporary fastqc directory as upstream.
+[[rules]]
+name = "fastqc_r1"
+description = "Run FastQC on R1 (fastqc v2.10.0 wrapper)"
+input = ["{config.reads_dir}/SRR702070_1.fastq.gz"]
+output = [
+    "results/qc/fastqc/SRR702070/lane1.fq1.html",
+    "results/qc/fastqc/SRR702070/lane1.fq1_fastqc.zip",
+]
+shell = """
+tmpdir=$(mktemp -d) && \
+fastqc --threads 1 --memory 1024 --outdir "$tmpdir" {input} && \
+mv "$tmpdir"/SRR702070_1_fastqc.html results/qc/fastqc/SRR702070/lane1.fq1.html && \
+mv "$tmpdir"/SRR702070_1_fastqc.zip results/qc/fastqc/SRR702070/lane1.fq1_fastqc.zip && \
+rm -rf "$tmpdir"
+"""
+log = "logs/fastqc/SRR702070/lane1.fq1.log"
+
+[rules.resources]
+threads = 1
+memory = "1G"
+
+[rules.environment]
+conda = "envs/fastqc.yaml"
+
+# ---- upstream rule: fastqc (R2) --------------------------------------------
+[[rules]]
+name = "fastqc_r2"
+description = "Run FastQC on R2 (fastqc v2.10.0 wrapper)"
+input = ["{config.reads_dir}/SRR702070_2.fastq.gz"]
+output = [
+    "results/qc/fastqc/SRR702070/lane1.fq2.html",
+    "results/qc/fastqc/SRR702070/lane1.fq2_fastqc.zip",
+]
+shell = """
+tmpdir=$(mktemp -d) && \
+fastqc --threads 1 --memory 1024 --outdir "$tmpdir" {input} && \
+mv "$tmpdir"/SRR702070_2_fastqc.html results/qc/fastqc/SRR702070/lane1.fq2.html && \
+mv "$tmpdir"/SRR702070_2_fastqc.zip results/qc/fastqc/SRR702070/lane1.fq2_fastqc.zip && \
+rm -rf "$tmpdir"
+"""
+log = "logs/fastqc/SRR702070/lane1.fq2.log"
+
+[rules.resources]
+threads = 1
+memory = "1G"
+
+[rules.environment]
+conda = "envs/fastqc.yaml"
+
+# ---- upstream rule: samtools_idxstats --------------------------------------
+[[rules]]
+name = "samtools_idxstats"
+description = "Collect per-contig alignment statistics (samtools idxstats v9.15.0 wrapper)"
+input = [
+    "results/recal/SRR702070.bam",
+    "results/recal/SRR702070.bai",
+]
+output = ["results/qc/SRR702070.bam.idxstats"]
+shell = "samtools idxstats {input[0]} > {output} 2> {log}"
+log = "logs/samtools/idxstats/SRR702070.log"
+
+[rules.environment]
+conda = "envs/samtools.yaml"
+
+# ---- upstream rule: samtools_stats -----------------------------------------
+[[rules]]
+name = "samtools_stats"
+description = "Collect alignment statistics (samtools stats v9.15.0 wrapper)"
+input = ["results/recal/SRR702070.bam"]
+output = ["results/qc/SRR702070.bam.stats"]
+shell = "samtools stats {input} > {output} 2> {log}"
+log = "logs/samtools/stats/SRR702070.log"
+
+[rules.environment]
+conda = "envs/samtools.yaml"
+
+# ---- upstream rule: multiqc ------------------------------------------------
+# multiqc v9.9.0 wrapper. This is a default target (upstream rule all).
+[[rules]]
+name = "multiqc"
+description = "Aggregate FastQC/idxstats/stats into a MultiQC report (multiqc v9.9.0 wrapper)"
+input = [
+    "results/qc/fastqc/SRR702070/lane1.fq1_fastqc.zip",
+    "results/qc/fastqc/SRR702070/lane1.fq2_fastqc.zip",
+    "results/qc/SRR702070.bam.idxstats",
+    "results/qc/SRR702070.bam.stats",
+]
+output = ["results/qc/multiqc/SRR702070_group.html"]
+target = true
+shell = """
+multiqc --exclude snippy --no-data-dir --outdir results/qc/multiqc \
+  --filename SRR702070_group \
+  {input[0]} {input[1]} {input[2]} {input[3]} 2> {log}
+"""
+log = "logs/multiqc/SRR702070_group.log"
+
+[rules.environment]
+conda = "envs/multiqc.yaml"

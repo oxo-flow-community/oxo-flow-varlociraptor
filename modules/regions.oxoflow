@@ -1,0 +1,111 @@
+# Calling regions (upstream workflow/rules/regions.smk).
+#
+# Rule map (upstream rule -> this module):
+#   transform_gene_annotations  -> ref::transform_gene_annotations (see ref.oxoflow)
+#   build_sample_regions        -> regions::build_sample_regions   (mosdepth v2.3.2 wrapper)
+#   merge_expanded_group_regions -> regions::merge_expanded_group_regions
+#   merge_covered_group_regions -> regions::merge_covered_group_regions
+#   filter_group_regions        -> regions::filter_group_regions_{expanded,covered}
+#                                  (regions_type wildcard frozen to both values)
+#   download_delly_excluded_regions -> regions::download_delly_excluded_regions
+#
+# get_target_regions is not in the default path (no target_regions in config).
+
+[workflow]
+name = "regions"
+
+# ---- upstream rule: build_sample_regions -----------------------------------
+# mosdepth v2.3.2 wrapper; prefix results/regions/{group}/{sample}.mosdepth.
+[[rules]]
+name = "build_sample_regions"
+description = "Compute per-base and per-gene coverage with mosdepth (mosdepth v2.3.2 wrapper)"
+input = [
+    "results/recal/SRR702070.bam",
+    "results/recal/SRR702070.bai",
+    "resources/gene_annotation.bed",
+]
+output = [
+    "results/regions/SRR702070_group/SRR702070.mosdepth.global.dist.txt",
+    "results/regions/SRR702070_group/SRR702070.quantized.bed.gz",
+    "results/regions/SRR702070_group/SRR702070.regions.bed.gz",
+    "results/regions/SRR702070_group/SRR702070.mosdepth.region.dist.txt",
+    "results/regions/SRR702070_group/SRR702070.mosdepth.summary.txt",
+]
+shell = """
+(mosdepth --by {input[2]} --quantize 1: --no-per-base \
+  results/regions/SRR702070_group/SRR702070 {input[0]}) 2> {log}
+"""
+log = "logs/mosdepth/regions/SRR702070_group_SRR702070.log"
+
+[rules.environment]
+conda = "envs/mosdepth.yaml"
+
+# ---- upstream rule: merge_expanded_group_regions ---------------------------
+[[rules]]
+name = "merge_expanded_group_regions"
+description = "Merge per-sample regions with 15 kb slack (mergeBed -d 15000)"
+input = ["results/regions/SRR702070_group/SRR702070.quantized.bed.gz"]
+output = ["results/regions/SRR702070_group.expanded_regions.bed"]
+shell = "zcat {input} | sort -k1,1 -k2,2n - | mergeBed -i - -d 15000 > {output} 2> {log}"
+log = "logs/regions/SRR702070_group_expanded_regions.log"
+
+[rules.environment]
+conda = "envs/bedtools.yaml"
+
+# ---- upstream rule: merge_covered_group_regions ----------------------------
+[[rules]]
+name = "merge_covered_group_regions"
+description = "Merge per-sample covered regions (mergeBed)"
+input = ["results/regions/SRR702070_group/SRR702070.quantized.bed.gz"]
+output = ["results/regions/SRR702070_group.covered_regions.bed"]
+shell = "zcat {input} | sort -k1,1 -k2,2n - | mergeBed -i - > {output} 2> {log}"
+log = "logs/regions/SRR702070_group_covered_regions.log"
+
+[rules.environment]
+conda = "envs/bedtools.yaml"
+
+# ---- upstream rule: filter_group_regions (expanded) ------------------------
+# n_chromosomes = 25 (first 25 FASTA entries, i.e. chr1-22 + X + Y + MT).
+[[rules]]
+name = "filter_group_regions_expanded"
+description = "Restrict expanded regions to the 25 reference chromosomes"
+input = [
+    "results/regions/SRR702070_group.expanded_regions.bed",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+]
+output = ["results/regions/SRR702070_group.expanded_regions.filtered.bed"]
+shell = """
+cat {input[0]} | grep -f <(head -n 25 {input[1]} | awk '{print "^"$1"\\t"}') | sort -k1,1 -k2,2n > {output} 2> {log}
+"""
+log = "logs/regions/SRR702070_group.expanded_regions.filtered.log"
+
+[rules.environment]
+conda = "envs/awk_bedtools.yaml"
+
+# ---- upstream rule: filter_group_regions (covered) -------------------------
+[[rules]]
+name = "filter_group_regions_covered"
+description = "Restrict covered regions to the 25 reference chromosomes"
+input = [
+    "results/regions/SRR702070_group.covered_regions.bed",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+]
+output = ["results/regions/SRR702070_group.covered_regions.filtered.bed"]
+shell = """
+cat {input[0]} | grep -f <(head -n 25 {input[1]} | awk '{print "^"$1"\\t"}') | sort -k1,1 -k2,2n > {output} 2> {log}
+"""
+log = "logs/regions/SRR702070_group.covered_regions.filtered.log"
+
+[rules.environment]
+conda = "envs/awk_bedtools.yaml"
+
+# ---- upstream rule: download_delly_excluded_regions ------------------------
+[[rules]]
+name = "download_delly_excluded_regions"
+description = "Download delly's excluded regions for hg38"
+output = ["results/regions/human.hg38.delly_excluded.bed"]
+shell = "curl https://raw.githubusercontent.com/dellytools/delly/main/excludeTemplates/human.hg38.excl.tsv -o {output} &> {log}"
+log = "logs/download_delly_regions/human_hg38.log"
+
+[rules.environment]
+conda = "envs/curl.yaml"

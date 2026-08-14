@@ -1,0 +1,9 @@
+# GATK — pinned to the baserecalibratorspark v1.25.0 / applybqsr v2.3.2
+# wrapper environments (gatk4 + samtools).
+name: gatk
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::gatk4=4.4.0.0
+  - bioconda::samtools=1.17

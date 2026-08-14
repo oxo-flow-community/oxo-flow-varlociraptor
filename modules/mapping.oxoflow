@@ -1,0 +1,214 @@
+# Read mapping and BAM processing (upstream workflow/rules/trimming.smk +
+# workflow/rules/mapping.smk).
+#
+# Rule map (upstream rule -> this module):
+#   merge_trimmed_fastqs       -> mapping::merge_trimmed_fastqs_{r1,r2}
+#                                 (no trimming configured -> raw passthrough)
+#   map_reads_vg               -> mapping::map_reads_vg      (vg giraffe v9.9.0 wrapper)
+#   postprocess_vg_alignments  -> mapping::postprocess_vg_alignments
+#   sort_alignments            -> mapping::sort_alignments   (samtools sort v9.15.0 wrapper)
+#   mark_duplicates            -> mapping::mark_duplicates   (picard markduplicates v2.5.0 wrapper)
+#   bam_index                  -> mapping::bam_index_dedup   (samtools index v9.15.0 wrapper)
+#   recalibrate_base_qualities -> mapping::recalibrate_base_qualities
+#                                 (gatk baserecalibratorspark v1.25.0 wrapper)
+#   apply_bqsr                 -> mapping::apply_bqsr        (gatk applybqsr v2.3.2 wrapper)
+#
+# Deviations (details in README.md):
+#   * Fastq input paths come from config.reads_dir (upstream config/units.tsv
+#     points at absolute /projects/... paths); raw reads pass through
+#     merge_trimmed_fastqs unchanged because no adapters are configured.
+#   * Read group is rendered with literal backslashes exactly as upstream.
+#   * apply_bqsr declares results/recal/{sample}.bam as protected_output
+#     (upstream `protected()`).
+
+[workflow]
+name = "mapping"
+
+# ---- upstream rule: merge_trimmed_fastqs (R1) ------------------------------
+[[rules]]
+name = "merge_trimmed_fastqs_r1"
+description = "Merge (here: pass through) R1 reads into results/merged"
+input = ["{config.reads_dir}/SRR702070_1.fastq.gz"]
+output = ["results/merged/SRR702070_R1.fastq.gz"]
+shell = "cat {input} > {output}"
+
+# ---- upstream rule: merge_trimmed_fastqs (R2) ------------------------------
+[[rules]]
+name = "merge_trimmed_fastqs_r2"
+description = "Merge (here: pass through) R2 reads into results/merged"
+input = ["{config.reads_dir}/SRR702070_2.fastq.gz"]
+output = ["results/merged/SRR702070_R2.fastq.gz"]
+shell = "cat {input} > {output}"
+
+# ---- upstream rule: map_reads_vg ------------------------------------------
+# vg giraffe v9.9.0 wrapper, sorting none (64 threads, 63 for the BAM
+# conversion as upstream).
+[[rules]]
+name = "map_reads_vg"
+description = "Map reads to the HPRC v1.1 pangenome with vg giraffe (vg giraffe v9.9.0 wrapper)"
+input = [
+    "resources/pangenome.homo_sapiens.GRCh38.dist",
+    "resources/pangenome.homo_sapiens.GRCh38.shortread.withzip.min",
+    "resources/pangenome.homo_sapiens.GRCh38.longread.withzip.min",
+    "resources/pangenome.homo_sapiens.GRCh38.shortread.zipcodes",
+    "resources/pangenome.homo_sapiens.GRCh38.longread.zipcodes",
+    "results/merged/SRR702070_R1.fastq.gz",
+    "results/merged/SRR702070_R2.fastq.gz",
+    "resources/pangenome.homo_sapiens.GRCh38.gbz",
+    "resources/pangenome.homo_sapiens.GRCh38.ref_paths.txt",
+]
+output = ["results/mapped/vg/SRR702070.raw.bam"]
+shell = """
+(vg giraffe -p -t 64 -Z {input[7]} -f {input[5]} -f {input[6]} \
+  --output-format BAM --ref-paths {input[8]} --parameter-preset default \
+  | samtools view --threads 63 -o {output} --output-fmt BAM) 2> {log}
+"""
+log = "logs/mapped/vg/SRR702070.log"
+
+[rules.resources]
+threads = 64
+
+[rules.environment]
+conda = "envs/vg.yaml"
+
+# ---- upstream rule: postprocess_vg_alignments ------------------------------
+[[rules]]
+name = "postprocess_vg_alignments"
+description = "Fix pangenome contig names, fixmate, and add the read group"
+input = ["results/mapped/vg/SRR702070.raw.bam"]
+output = ["results/mapped/vg/SRR702070.bam"]
+shell = """
+(samtools view {input} -H | \
+ sed -E 's/(SN:GRCh38#0#chr)/SN:/; s/SN:M/SN:MT/' | \
+ samtools reheader - {input} | \
+ samtools fixmate - - | \
+ samtools addreplacerg - -r "'@RG\\tID:SRR702070\\tSM:SRR702070\\tPL:ILLUMINA'") > {output} 2> {log}
+"""
+log = "logs/reheader/SRR702070.log"
+
+[rules.environment]
+conda = "envs/samtools.yaml"
+
+# ---- upstream rule: sort_alignments ----------------------------------------
+# samtools sort v9.15.0 wrapper (16 threads, 32000 MiB -> -m 1800M).
+[[rules]]
+name = "sort_alignments"
+description = "Coordinate-sort the mapped BAM (samtools sort v9.15.0 wrapper)"
+input = ["results/mapped/vg/SRR702070.bam"]
+output = ["results/mapped/vg/SRR702070.sorted.bam"]
+shell = """
+tmpdir=$(mktemp -d) && \
+samtools sort --threads 15 -o {output} --output-fmt BAM -m 1800M -T "$tmpdir/samtools_sort" {input} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/sort/vg/SRR702070.log"
+
+[rules.resources]
+threads = 16
+memory = "32G"
+
+[rules.environment]
+conda = "envs/samtools.yaml"
+
+# ---- upstream rule: mark_duplicates ----------------------------------------
+# picard markduplicates v2.5.0 wrapper (3000 MiB, java overhead 0.3 -> -Xmx2100M).
+[[rules]]
+name = "mark_duplicates"
+description = "Mark PCR duplicates with picard MarkDuplicates (markduplicates v2.5.0 wrapper)"
+input = ["results/mapped/vg/SRR702070.sorted.bam"]
+output = [
+    "results/dedup/SRR702070.bam",
+    "results/qc/dedup/SRR702070.metrics.txt",
+]
+shell = """
+tmpdir=$(mktemp -d) && \
+(picard MarkDuplicates -Xmx2100M -Djava.io.tmpdir="$tmpdir" \
+  --VALIDATION_STRINGENCY LENIENT --INPUT {input} --TMP_DIR "$tmpdir" \
+  --OUTPUT {output[0]} --METRICS_FILE {output[1]}) 2> {log} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/picard/dedup/SRR702070.log"
+
+[rules.resources]
+memory = "3G"
+
+[rules.environment]
+conda = "envs/picard.yaml"
+
+# ---- upstream rule: bam_index (dedup bam) ----------------------------------
+# samtools index v9.15.0 wrapper.
+[[rules]]
+name = "bam_index_dedup"
+description = "Index the deduplicated BAM (samtools index v9.15.0 wrapper)"
+input = ["results/dedup/SRR702070.bam"]
+output = ["results/dedup/SRR702070.bai"]
+shell = "samtools index {input} {output} 2> {log}"
+log = "logs/bam-index/SRR702070.log"
+
+[rules.environment]
+conda = "envs/samtools.yaml"
+
+# ---- upstream rule: recalibrate_base_qualities -----------------------------
+# gatk baserecalibratorspark v1.25.0 wrapper (8 threads, 1024 MiB ->
+# -Xmx819M, --spark-master local[8]).
+[[rules]]
+name = "recalibrate_base_qualities"
+description = "Build the BQSR recalibration table (baserecalibratorspark v1.25.0 wrapper)"
+input = [
+    "results/dedup/SRR702070.bam",
+    "results/dedup/SRR702070.bai",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.dict",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+    "resources/variation.noiupac.vcf.gz",
+    "resources/variation.noiupac.vcf.gz.tbi",
+]
+output = ["results/recal/SRR702070.grp"]
+shell = """
+tmpdir=$(mktemp -d) && \
+(gatk --java-options '-Xmx819M -Djava.io.tmpdir='"$tmpdir" BaseRecalibratorSpark \
+  --input {input[0]} --reference {input[2]} --tmp-dir "$tmpdir" \
+  --output {output} --known-sites {input[5]} \
+  -- --spark-runner LOCAL --spark-master local[8]) 2> {log} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/gatk/baserecalibrator/SRR702070.log"
+
+[rules.resources]
+threads = 8
+memory = "1G"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+# ---- upstream rule: apply_bqsr ---------------------------------------------
+# gatk applybqsr v2.3.2 wrapper. The BAM index is produced by GATK itself
+# (upstream ruleorder: apply_bqsr > bam_index). The .bam is protected as
+# upstream (protected()).
+[[rules]]
+name = "apply_bqsr"
+description = "Apply BQSR with GATK ApplyBQSR (applybqsr v2.3.2 wrapper)"
+input = [
+    "results/dedup/SRR702070.bam",
+    "results/dedup/SRR702070.bai",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.dict",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+    "results/recal/SRR702070.grp",
+]
+output = [
+    "results/recal/SRR702070.bam",
+    "results/recal/SRR702070.bai",
+]
+protected_output = ["results/recal/SRR702070.bam"]
+shell = """
+tmpdir=$(mktemp -d) && \
+(gatk --java-options '-Xmx164M -Djava.io.tmpdir='"$tmpdir" ApplyBQSR \
+  --input {input[0]} --bqsr-recal-file {input[5]} --reference {input[2]} \
+  --tmp-dir "$tmpdir" --output {output[0]}) 2> {log} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/gatk/gatk_applybqsr/SRR702070.log"
+
+[rules.environment]
+conda = "envs/gatk.yaml"

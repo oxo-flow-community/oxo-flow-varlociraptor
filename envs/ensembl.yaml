@@ -1,0 +1,9 @@
+# Ensembl reference downloads (ensembl-variation v7.5.0 wrapper, curl +
+# bcftools for the known-variants concatenation).
+name: ensembl
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - conda-forge::curl=7.86.0
+  - bioconda::bcftools=1.22

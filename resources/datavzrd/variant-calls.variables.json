@@ -1,0 +1,30 @@
+{
+  "params": {
+    "groups": ["SRR702070_group"],
+    "build": "GRCh38",
+    "genebe_genome_build": "hg38",
+    "event_desc": "Some description.",
+    "samples": {
+      "columns": ["sample_name", "alias", "group", "platform", "purity", "panel", "umi_read", "umi_len", "datatype", "calling"],
+      "data": [["SRR702070", "tumor", "SRR702070_group", "ILLUMINA", 1.0, "", "", "", "dna", "variants"]]
+    },
+    "group_annotations": {
+      "columns": ["group"],
+      "data": [["SRR702070_group"]],
+      "index": ["group"]
+    },
+    "labels": {"columns": [], "data": []},
+    "variant_oncoprints": []
+  },
+  "wildcards": {
+    "event": "some_id",
+    "batch": "all"
+  },
+  "input": {
+    "calls": ["results/tables/SRR702070_group/SRR702070_group.some_id.variants.postprocessed.fdr-controlled.tsv"],
+    "linkouts": "resources/datavzrd/linkouts.js",
+    "gene_oncoprint": [],
+    "variant_oncoprints": [],
+    "oncoprint_sorted_datasets": "results/tables/oncoprints/all.some_id/label_sortings/"
+  }
+}

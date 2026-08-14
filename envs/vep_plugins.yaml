@@ -1,0 +1,7 @@
+# Python for the VEP plugins downloader (wrapper v8.0.0 bio/vep/plugins).
+name: vep_plugins
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - conda-forge::python=3.14.0

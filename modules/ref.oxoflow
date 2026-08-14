@@ -1,0 +1,281 @@
+# Reference resources (upstream workflow/rules/ref.smk + plugins.smk).
+#
+# Rule map (upstream rule -> this module):
+#   get_genome            -> ref::get_genome            (ensembl-sequence v7.3.0 wrapper)
+#   genome_faidx          -> ref::genome_faidx          (samtools faidx v9.15.0 wrapper)
+#   genome_dict           -> ref::genome_dict
+#   get_known_variants    -> ref::get_known_variants    (ensembl-variation v7.5.0 wrapper)
+#   remove_iupac_codes    -> ref::remove_iupac_codes
+#   get_vep_cache         -> ref::get_vep_cache         (vep cache v8.0.0 wrapper; directory -> marker)
+#   get_vep_plugins       -> ref::get_vep_plugins       (vep plugins v8.0.0 wrapper; directory -> marker)
+#   get_pangenome         -> ref::get_pangenome
+#   pangenome_autoindex   -> ref::pangenome_autoindex
+#   get_reference_paths   -> ref::get_reference_paths
+#   get_annotation        -> ref::get_annotation        (ensembl-annotation v7.5.0 wrapper)
+#   transform_gene_annotations -> ref::transform_gene_annotations (scripts/transform_gene_regions.py)
+#   download_revel        -> ref::download_revel
+#   process_revel_scores  -> ref::process_revel_scores
+#   tabix_txt_tsv         -> ref::tabix_* (one rule per indexed resource)
+#
+# Deviations (details in README.md):
+#   * Ensembl FTP fallbacks removed (FTP is discontinued); https only.
+#   * VEP cache/plugin directories are represented by marker files
+#     (resources/vep/cache/.cache_complete, resources/vep/plugins/.plugins_complete).
+#   * vep_install --CACHEURL points at the tarball's directory as upstream.
+
+[workflow]
+name = "ref"
+
+# ---- upstream rule: get_genome --------------------------------------------
+# ensembl-sequence v7.3.0 wrapper: primary_assembly fasta for GRCh38, release
+# 111 (the upstream toplevel fallback is dropped together with the FTP path).
+[[rules]]
+name = "get_genome"
+description = "Download GRCh38 primary assembly FASTA from Ensembl release 111 (ensembl-sequence v7.3.0)"
+output = ["resources/genome.dna.homo_sapiens.GRCh38.111.fasta"]
+shell = """
+(curl -L https://ftp.ensembl.org/pub/release-111/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz | gzip -d > {output}) 2> {log}
+"""
+log = "logs/get-genome.log"
+
+[rules.environment]
+conda = "envs/curl.yaml"
+
+# ---- upstream rule: genome_faidx ------------------------------------------
+# samtools faidx v9.15.0 wrapper.
+[[rules]]
+name = "genome_faidx"
+description = "Create the FASTA index (samtools faidx v9.15.0 wrapper)"
+input = ["resources/genome.dna.homo_sapiens.GRCh38.111.fasta"]
+output = ["resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai"]
+shell = "samtools faidx --fai-idx {output} -o {output} {input} 2> {log}"
+log = "logs/genome-faidx.log"
+
+[rules.environment]
+conda = "envs/samtools.yaml"
+
+# ---- upstream rule: genome_dict -------------------------------------------
+[[rules]]
+name = "genome_dict"
+description = "Create the GATK sequence dictionary (samtools dict)"
+input = ["resources/genome.dna.homo_sapiens.GRCh38.111.fasta"]
+output = ["resources/genome.dna.homo_sapiens.GRCh38.111.dict"]
+shell = "samtools dict {input} > {output} 2> {log}"
+log = "logs/samtools/create_dict.log"
+
+[rules.environment]
+conda = "envs/samtools.yaml"
+
+# ---- upstream rule: get_known_variants ------------------------------------
+# ensembl-variation v7.5.0 wrapper: 25 per-chromosome VCFs (1-22, X, Y, MT),
+# concatenated with bcftools concat -Oz --naive and reheadered to the
+# reference FASTA contigs.
+[[rules]]
+name = "get_known_variants"
+description = "Download Ensembl release 111 known variants (ensembl-variation v7.5.0 wrapper)"
+input = ["resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai"]
+output = ["resources/variation.vcf.gz"]
+shell = """
+tmpdir=$(mktemp -d) && \
+for chrom in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 X Y MT; do \
+  curl -fsSL -o "$tmpdir/homo_sapiens-chr${chrom}.vcf.gz" "https://ftp.ensembl.org/pub/release-111/variation/vcf/homo_sapiens/homo_sapiens-chr${chrom}.vcf.gz" || exit 1; \
+done && \
+bcftools concat -Oz --naive "$tmpdir"/homo_sapiens-chr*.vcf.gz > "$tmpdir/concat.vcf.gz" && \
+bcftools reheader --fai {input} "$tmpdir/concat.vcf.gz" > {output} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/get-known-variants.log"
+
+[rules.environment]
+conda = "envs/ensembl.yaml"
+
+# ---- upstream rule: remove_iupac_codes ------------------------------------
+[[rules]]
+name = "remove_iupac_codes"
+description = "Fix IUPAC ambiguity alleles in the known-variants VCF (rbt vcf-fix-iupac-alleles)"
+input = ["resources/variation.vcf.gz"]
+output = ["resources/variation.noiupac.vcf.gz"]
+shell = "(rbt vcf-fix-iupac-alleles < {input} | bcftools view -Oz > {output}) 2> {log}"
+log = "logs/fix-iupac-alleles.log"
+
+[rules.environment]
+conda = "envs/rbt.yaml"
+
+# ---- upstream rule: get_vep_cache -----------------------------------------
+# vep cache v8.0.0 wrapper (indexed cache tarball, https only). The upstream
+# directory output is represented by a marker file.
+[[rules]]
+name = "get_vep_cache"
+description = "Download and install the VEP cache (vep cache v8.0.0 wrapper)"
+output = ["resources/vep/cache/.cache_complete"]
+shell = """
+mkdir -p resources/vep/cache && \
+tmpdir=$(mktemp -d) && \
+curl --fail -L https://ftp.ensembl.org/pub/release-111/variation/indexed_vep_cache/homo_sapiens_vep_111_GRCh38.tar.gz -o "$tmpdir/homo_sapiens_vep_111_GRCh38.tar.gz" && \
+gzip -t "$tmpdir/homo_sapiens_vep_111_GRCh38.tar.gz" && \
+vep_install --AUTO c --SPECIES homo_sapiens --ASSEMBLY GRCh38 --CACHE_VERSION 111 --CACHEURL "$tmpdir" --CACHEDIR resources/vep/cache --NO_UPDATE && \
+rm -rf "$tmpdir" && \
+touch resources/vep/cache/.cache_complete
+"""
+log = "logs/vep/cache.log"
+
+[rules.environment]
+conda = "envs/vep.yaml"
+
+# ---- upstream rule: get_vep_plugins ---------------------------------------
+# vep plugins v8.0.0 wrapper (python: download release zip, extract skipping
+# the root directory). The upstream directory output is a marker file.
+[[rules]]
+name = "get_vep_plugins"
+description = "Download and install VEP plugins release 111 (vep plugins v8.0.0 wrapper)"
+output = ["resources/vep/plugins/.plugins_complete"]
+shell = """
+mkdir -p resources/vep/plugins && \
+python scripts/download_vep_plugins.py 111 resources/vep/plugins 2> {log} && \
+touch resources/vep/plugins/.plugins_complete
+"""
+log = "logs/vep/plugins.log"
+
+[rules.environment]
+conda = "envs/vep_plugins.yaml"
+
+# ---- upstream rule: get_pangenome -----------------------------------------
+[[rules]]
+name = "get_pangenome"
+description = "Download the HPRC v1.1 pangenome graph (hprc-v1.1-mc-grch38.d9.gbz)"
+output = ["resources/pangenome.homo_sapiens.GRCh38.gbz"]
+shell = "curl -fSL -o {output} https://s3-us-west-2.amazonaws.com/human-pangenomics/pangenomes/freeze/freeze1/minigraph-cactus/hprc-v1.1-mc-grch38/hprc-v1.1-mc-grch38.d9.gbz 2> {log}"
+log = "logs/get_pangenome.log"
+
+[rules.environment]
+conda = "envs/curl.yaml"
+
+# ---- upstream rule: pangenome_autoindex -----------------------------------
+[[rules]]
+name = "pangenome_autoindex"
+description = "Index the pangenome graph with vg autoindex (sr- and lr-giraffe)"
+input = ["resources/pangenome.homo_sapiens.GRCh38.gbz"]
+output = [
+    "resources/pangenome.homo_sapiens.GRCh38.dist",
+    "resources/pangenome.homo_sapiens.GRCh38.shortread.withzip.min",
+    "resources/pangenome.homo_sapiens.GRCh38.longread.withzip.min",
+    "resources/pangenome.homo_sapiens.GRCh38.shortread.zipcodes",
+    "resources/pangenome.homo_sapiens.GRCh38.longread.zipcodes",
+]
+shell = """
+vg autoindex --workflow sr-giraffe --workflow lr-giraffe --threads 64 \
+  --gbz {input} --prefix resources/pangenome.homo_sapiens.GRCh38 \
+  {output[0]} {output[1]} {output[2]} {output[3]} {output[4]} {input} 2> {log}
+"""
+log = "logs/vg_autoindex.log"
+
+[rules.resources]
+threads = 64
+
+[rules.environment]
+conda = "envs/vg.yaml"
+
+# ---- upstream rule: get_reference_paths -----------------------------------
+[[rules]]
+name = "get_reference_paths"
+description = "Extract GRCh38 reference paths from the pangenome graph"
+input = ["resources/pangenome.homo_sapiens.GRCh38.gbz"]
+output = ["resources/pangenome.homo_sapiens.GRCh38.ref_paths.txt"]
+shell = """
+(vg paths -x {input} -L --paths-by GRCh38 \
+ | grep -v '_random' \
+ | grep -v 'chrUn_' \
+ | grep -v '_decoy' \
+ | grep -v 'EBV') > {output} 2> {log}
+"""
+log = "logs/reference/paths.log"
+
+[rules.environment]
+conda = "envs/vg.yaml"
+
+# ---- upstream rule: get_annotation ----------------------------------------
+# ensembl-annotation v7.5.0 wrapper.
+[[rules]]
+name = "get_annotation"
+description = "Download the Ensembl release 111 GTF annotation (ensembl-annotation v7.5.0 wrapper)"
+output = ["resources/annotation.gtf"]
+shell = "(curl --fail -L https://ftp.ensembl.org/pub/release-111/gtf/homo_sapiens/Homo_sapiens.GRCh38.111.gtf.gz | gzip -d > {output}) 2> {log}"
+log = "logs/get_annotation.log"
+
+[rules.environment]
+conda = "envs/curl.yaml"
+
+# ---- upstream rule: transform_gene_annotations ----------------------------
+[[rules]]
+name = "transform_gene_annotations"
+description = "Extract gene coordinates from the GTF (scripts/transform_gene_regions.py)"
+input = ["resources/annotation.gtf"]
+output = ["resources/gene_annotation.bed"]
+shell = "python scripts/transform_gene_regions.py {input} {output} {log}"
+log = "logs/plot_coverage/transform_gene_regions.log"
+
+[rules.environment]
+conda = "envs/pystats.yaml"
+
+# ---- upstream rule: download_revel ----------------------------------------
+[[rules]]
+name = "download_revel"
+description = "Download REVEL scores from Zenodo (revel-v1.3_all_chromosomes.zip)"
+output = ["resources/revel_scores.zip"]
+shell = "curl https://zenodo.org/records/7072866/files/revel-v1.3_all_chromosomes.zip -o {output} &> {log}"
+log = "logs/vep_plugins/download_revel.log"
+
+[rules.environment]
+conda = "envs/curl.yaml"
+
+# ---- upstream rule: process_revel_scores ----------------------------------
+# GRCh38 branch of the upstream shell.
+[[rules]]
+name = "process_revel_scores"
+description = "Tab-separate and sort REVEL scores for VEP (GRCh38 branch)"
+input = ["resources/revel_scores.zip"]
+output = ["resources/revel_scores.tsv.gz"]
+shell = """
+tmpfile=$(mktemp /tmp/revel_scores.XXXXXX) && \
+unzip -p {input} | tr "," "\t" | sed '1s/.*/#&/' | bgzip -c > "$tmpfile" && \
+zgrep -h -v ^#chr "$tmpfile" | awk '$3 != "."' | sort -k1,1 -k3,3n - | cat <(zcat "$tmpfile" | head -n1) - | bgzip -c > {output} && \
+rm -f "$tmpfile"
+"""
+log = "logs/vep_plugins/process_revel_scores.log"
+
+[rules.environment]
+conda = "envs/htslib.yaml"
+
+# ---- upstream rule: tabix_txt_tsv (three instances) -----------------------
+[[rules]]
+name = "tabix_variation"
+description = "Index the known-variants VCF (tabix -p vcf)"
+input = ["resources/variation.vcf.gz"]
+output = ["resources/variation.vcf.gz.tbi"]
+shell = "tabix -p vcf {input} 2> {log}"
+log = "logs/tabix/variation.log"
+
+[rules.environment]
+conda = "envs/htslib.yaml"
+
+[[rules]]
+name = "tabix_noiupac"
+description = "Index the IUPAC-fixed known-variants VCF (tabix -p vcf)"
+input = ["resources/variation.noiupac.vcf.gz"]
+output = ["resources/variation.noiupac.vcf.gz.tbi"]
+shell = "tabix -p vcf {input} 2> {log}"
+log = "logs/tabix/variation.noiupac.log"
+
+[rules.environment]
+conda = "envs/htslib.yaml"
+
+[[rules]]
+name = "tabix_revel"
+description = "Index the REVEL scores TSV (tabix -s 1 -b 3 -e 3, GRCh38)"
+input = ["resources/revel_scores.tsv.gz"]
+output = ["resources/revel_scores.tsv.gz.tbi"]
+shell = "tabix -s 1 -b 3 -e 3 {input} 2> {log}"
+log = "logs/tabix/revel_scores.log"
+
+[rules.environment]
+conda = "envs/htslib.yaml"
