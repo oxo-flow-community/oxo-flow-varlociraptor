@@ -1,11 +1,72 @@
-# oxo-flow-varlociraptor
+# oxo-flow-varlociraptor — Small and structural variant calling with Varlociraptor
 
-Small and structural variant calling with Varlociraptor.
-This repository is a port of
-[snakemake-workflows/dna-seq-varlociraptor](https://github.com/snakemake-workflows/dna-seq-varlociraptor)
-v6.10.0 (MIT) to [oxo-flow](https://github.com/Traitome/oxo-flow) (>= 0.11.0).
+[![CI](https://github.com/oxo-flow-community/oxo-flow-varlociraptor/actions/workflows/ci.yml/badge.svg)](https://github.com/oxo-flow-community/oxo-flow-varlociraptor/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-## Quick start
+> ★ Verified · ⇄ Official port of [`snakemake-workflows/dna-seq-varlociraptor`](https://github.com/snakemake-workflows/dna-seq-varlociraptor) @ `v6.10.0` — same tools, same versions, same commands. Part of the [oxo-flow-community catalog](https://oxo-flow-community.github.io/).
+
+Align paired-end short reads against the 1000 Genomes human pangenome with vg
+giraffe, call candidate small and structural variants with freebayes and
+delly, and get a scenario-driven somatic call set from Varlociraptor: alignment
+properties are estimated, variants are called under a tumor scenario, FDR is
+controlled per variant type (SNV/INS/DEL/MNV/BND/INV/DUP/REP), and the calls
+are annotated with VEP and dbSNFP, filtered, and rendered as an interactive
+datavzrd report with an oncoprint-style label-sorting table. You get
+pangenome-aligned, deduplicated and recalibrated BAMs, per-gene coverage
+tables, FDR-controlled and annotated variant calls (BCF/VCF), the
+postprocessed variant table, and the variant and gene-coverage HTML reports.
+
+## Installation
+
+### 1. Install oxo-flow
+
+Requires **oxo-flow >= 0.11.0**. Release binary (recommended):
+
+```bash
+curl -fL -o oxo-flow.tar.gz \
+  https://github.com/Traitome/oxo-flow/releases/download/v0.11.0/oxo-flow-v0.11.0-x86_64-unknown-linux-gnu.tar.gz
+tar xzf oxo-flow.tar.gz
+sudo mv oxo-flow /usr/local/bin/
+```
+
+Alternatively via conda: `conda install -c bioconda oxo-flow-cli` (note: the
+conda package may lag behind releases; other platform binaries are available
+on the [releases page](https://github.com/Traitome/oxo-flow/releases)).
+
+### 2. Get this workflow
+
+```bash
+git clone https://github.com/oxo-flow-community/oxo-flow-varlociraptor.git
+cd oxo-flow-varlociraptor
+```
+
+### 3. Requirements
+
+- **Input reads (user-provided)** — paired-end FASTQ at
+  `reads_dir/<sample>_1.fastq.gz` and `reads_dir/<sample>_2.fastq.gz`
+  (paired-end only). The sample cohort is declared in `[[sample_groups]]` with
+  group metadata (alias, platform, purity, datatype, calling mode) expressed
+  through the sample group name — one sample group = one tumor sample with a
+  fixed scenario. The repository ships tiny synthetic FASTQ fixtures
+  (`test/fixtures/raw/`), so the default config validates and dry-runs
+  cleanly without any downloads.
+- **Reference data (none to prepare)** — all reference resources are
+  downloaded by the workflow itself into `resources/`, exactly like upstream:
+  the GRCh38 primary assembly FASTA (Ensembl release 111) plus `.fai`/`.dict`
+  indices, the Ensembl release 111 GTF annotation, the VEP cache and plugins
+  (release 111), REVEL scores, the Ensembl known-variants VCFs, and the HPRC
+  v1.1 human pangenome graph.
+- **Compute** — up to 96 CPUs / 32 GB per rule (freebayes candidate calling:
+  96 threads; vg giraffe mapping: 64 threads; samtools sort: 16 threads / 32G;
+  Varlociraptor calling: 8G).
+- **Tools** — conda environments with pinned versions, one env per tool pin
+  set under `envs/` (declared per rule via `[rules.environment]` in the
+  module files). No containers are used; conda/mamba is required at runtime.
+- **Disk** — the reference downloads under `resources/` are large (pangenome
+  graph, VEP cache, known-variants VCFs), and `results/` grows with BAMs,
+  BCFs, tables and reports.
+
+## Usage
 
 ```bash
 # Point OXO at your oxo-flow binary (>= 0.11.0)
@@ -25,34 +86,11 @@ export OXO=oxo-flow
 bash test/run.sh
 ```
 
-## About
-
-The upstream workflow aligns short reads against the 1000 Genomes human
-pangenome with vg giraffe, calls candidate variants with freebayes and delly,
-estimates alignment properties, calls variants with Varlociraptor under a
-scenario, performs FDR control per variant type, annotates with VEP and
-dbSNFP, filters, and renders a datavzrd report with an oncoprint-style
-label-sorting table.
-
 The port covers the **default-parameter execution path** for a single tumor
 sample group (`SRR702070_group`, sample `SRR702070`, alias `tumor`, purity
 1.0, calling mode `variants`): pangenome mapping, candidate calling,
 Varlociraptor calling + FDR control over 8 variant types, VEP/dbSNFP
 annotation, filtering, and the datavzrd report. 88 rules in total.
-
-### Inputs
-
-- Reads: `reads_dir/<sample>_1.fastq.gz` and `reads_dir/<sample>_2.fastq.gz`
-  (paired-end only). The sample cohort is declared in `[[sample_groups]]` with
-  group metadata (alias, platform, purity, datatype, calling mode) expressed
-  through the sample group name — the port follows the upstream convention
-  that one sample group = one tumor sample with a fixed scenario.
-- All reference resources (1000 Genomes pangenome GBZ, GRCh38 FASTA, VEP
-  cache/plugins, REVEL scores, dbSNFP/dbSNP VCFs, annotation GTF) are
-  downloaded by the workflow itself into `resources/`, exactly like upstream.
-
-The repository ships tiny synthetic FASTQ fixtures (`test/fixtures/raw/`), so
-the default config validates and dry-runs cleanly without any downloads.
 
 ### Configuration
 
@@ -68,30 +106,9 @@ somatic_tumor_high / somatic_tumor_medium, FDR threshold 0.05, mode
 REVEL score file `resources/revel_scores.tsv.gz`, dbSNFP
 `resources/variation.vcf.gz`, and the datavzrd report templates.
 
-## Outputs
+## Source
 
-All paths are relative to the run directory and follow the upstream layout
-(`results/...`), so rendered commands are byte-identical to the upstream
-snakemake-wrappers ports.
-
-- `results/calls/...` — Varlociraptor raw calls, VEP-annotated calls
-  (`results/calls/vep_annotated/`), dbSNFP-annotated calls
-  (`results/calls/db_annotated/`), annotation-filtered calls
-  (`results/calls/filtered/`), per-variant-type FDR-controlled calls
-  (`results/calls/fdr-controlled/{group}/some_id/*.variants.bcf`) and the
-  merged final call set
-  (`results/final-calls/{group}/{group}.some_id.variants.fdr-controlled.bcf`).
-- `results/tables/...` — the postprocessed variant table
-  (`{group}.some_id.variants.postprocessed.fdr-controlled.tsv`) and the
-  label-sorting outputs for the oncoprint table.
-- `results/datavzrd-report/all.some_id.variants.fdr-controlled/index.html` —
-  the interactive variant report (datavzrd).
-- `results/datavzrd-report/{group}.coverage/index.html` and
-  `results/coverage/{group}.csv` — the gene-coverage report and table.
-- `results/mapped/`, `results/dedup/`, `results/recal/`, `results/qc/`,
-  `results/regions/`, `results/observations/`,
-  `results/candidate-calls/`, `results/scenarios/` — intermediate artifacts
-  mirroring upstream.
+Upstream: **[snakemake-workflows/dna-seq-varlociraptor](https://github.com/snakemake-workflows/dna-seq-varlociraptor)** @ `v6.10.0` (commit `b65c3350b31d68f7fd36a497b9d11b37f2d03df3`), MIT license. Created 2026-08-15; this workflow may lag behind upstream releases. See [NOTICE.md](NOTICE.md) for attribution.
 
 ## Fidelity
 
@@ -112,18 +129,17 @@ deliberate deviations:
 | Snakemake `temp()` outputs | `temporary = true` | engine equivalent |
 | per-rule conda environments | one env per tool pin set (`envs/`) | same packages, same pins, consolidated |
 
-## Not ported (metadata `excluded`)
+## Test
 
-Everything outside the default-parameter main path of the upstream workflow:
-bwa mapping, read trimming (fastp), fusion calling (arriba), MAF conversion,
-mutational burden and mutational signature analyses, the population database
-(germline AF annotation), dgidb druggability, CADD annotation, primer design,
-benchmarking, consensus reads, target regions, and the template oncoprint
-views. None of these are reachable with the upstream default configuration.
+```bash
+bash test/run.sh
+```
+
+Runs `oxo-flow validate`, `oxo-flow lint`, a `dry-run` smoke check and a debug
+scan for unexpanded wildcards; CI runs the same script on every push.
 
 ## License
 
-Apache-2.0 (this port), see `LICENSE` and `NOTICE.md`.
-The upstream workflow is MIT; its license text is kept verbatim at
-`LICENSE.upstream` (Apache-2.0 §4(d): attribution notices from the Source
-form must be retained).
+Apache-2.0. Copyright (c) 2026 oxo-flow-community. Upstream attribution in
+[NOTICE.md](NOTICE.md); the upstream MIT license is included verbatim at
+[LICENSE.upstream](LICENSE.upstream).
