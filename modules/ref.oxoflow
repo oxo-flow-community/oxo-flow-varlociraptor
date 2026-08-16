@@ -32,6 +32,7 @@ name = "ref"
 [[rules]]
 name = "get_genome"
 description = "Download GRCh38 primary assembly FASTA from Ensembl release 111 (ensembl-sequence v7.3.0)"
+when = "!config.skip_ref_downloads"
 output = ["resources/genome.dna.homo_sapiens.GRCh38.111.fasta"]
 shell = """
 (curl -L https://ftp.ensembl.org/pub/release-111/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz | gzip -d > {output}) 2> {log}
@@ -73,6 +74,7 @@ conda = "envs/samtools.yaml"
 [[rules]]
 name = "get_known_variants"
 description = "Download Ensembl release 111 known variants (ensembl-variation v7.5.0 wrapper)"
+when = "!config.skip_ref_downloads"
 input = ["resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai"]
 output = ["resources/variation.vcf.gz"]
 shell = """
@@ -107,6 +109,7 @@ conda = "envs/rbt.yaml"
 [[rules]]
 name = "get_vep_cache"
 description = "Download and install the VEP cache (vep cache v8.0.0 wrapper)"
+when = "!config.skip_ref_downloads"
 output = ["resources/vep/cache/.cache_complete"]
 shell = """
 mkdir -p resources/vep/cache && \
@@ -128,6 +131,7 @@ conda = "envs/vep.yaml"
 [[rules]]
 name = "get_vep_plugins"
 description = "Download and install VEP plugins release 111 (vep plugins v8.0.0 wrapper)"
+when = "!config.skip_ref_downloads"
 output = ["resources/vep/plugins/.plugins_complete"]
 shell = """
 mkdir -p resources/vep/plugins && \
@@ -143,6 +147,7 @@ conda = "envs/vep_plugins.yaml"
 [[rules]]
 name = "get_pangenome"
 description = "Download the HPRC v1.1 pangenome graph (hprc-v1.1-mc-grch38.d9.gbz)"
+when = "!config.skip_ref_downloads"
 output = ["resources/pangenome.homo_sapiens.GRCh38.gbz"]
 shell = "curl -fSL -o {output} https://s3-us-west-2.amazonaws.com/human-pangenomics/pangenomes/freeze/freeze1/minigraph-cactus/hprc-v1.1-mc-grch38/hprc-v1.1-mc-grch38.d9.gbz 2> {log}"
 log = "logs/get_pangenome.log"
@@ -198,6 +203,7 @@ conda = "envs/vg.yaml"
 [[rules]]
 name = "get_annotation"
 description = "Download the Ensembl release 111 GTF annotation (ensembl-annotation v7.5.0 wrapper)"
+when = "!config.skip_ref_downloads"
 output = ["resources/annotation.gtf"]
 shell = "(curl --fail -L https://ftp.ensembl.org/pub/release-111/gtf/homo_sapiens/Homo_sapiens.GRCh38.111.gtf.gz | gzip -d > {output}) 2> {log}"
 log = "logs/get_annotation.log"
@@ -221,6 +227,7 @@ conda = "envs/pystats.yaml"
 [[rules]]
 name = "download_revel"
 description = "Download REVEL scores from Zenodo (revel-v1.3_all_chromosomes.zip)"
+when = "!config.skip_ref_downloads"
 output = ["resources/revel_scores.zip"]
 shell = "curl https://zenodo.org/records/7072866/files/revel-v1.3_all_chromosomes.zip -o {output} &> {log}"
 log = "logs/vep_plugins/download_revel.log"

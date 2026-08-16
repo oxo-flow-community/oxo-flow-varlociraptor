@@ -25,6 +25,13 @@ description = "Small and structural variant calling with Varlociraptor (port of 
 # from the repository fixtures instead).
 reads_dir = "test/fixtures/raw"
 
+# Skip the ref:: download rules (genome, annotation, VEP cache/plugins,
+# pangenome, REVEL, known variants — ~5 GB of public databases). Set to
+# true when you have pre-placed the files at the resource paths the rules
+# declare (see README "Reference databases"); the downloads are hardcoded
+# upstream URLs and need unimpeded network access.
+skip_ref_downloads = false
+
 # ---------------------------------------------------------------------------
 # Sample groups (upstream config/samples.tsv: SRR702070 -> SRR702070_group,
 # alias "tumor", platform ILLUMINA, purity 1.0, datatype dna, calling variants)
