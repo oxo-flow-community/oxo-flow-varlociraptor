@@ -6,4 +6,5 @@ channels:
   - bioconda
 dependencies:
   - conda-forge::curl=7.86.0
+  - ca-certificates
   - bioconda::bcftools=1.22
