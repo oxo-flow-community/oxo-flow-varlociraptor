@@ -50,12 +50,16 @@ cd oxo-flow-varlociraptor
   fixed scenario. The repository ships tiny synthetic FASTQ fixtures
   (`test/fixtures/raw/`), so the default config validates and dry-runs
   cleanly without any downloads.
-- **Reference data (none to prepare)** — all reference resources are
-  downloaded by the workflow itself into `resources/`, exactly like upstream:
-  the GRCh38 primary assembly FASTA (Ensembl release 111) plus `.fai`/`.dict`
-  indices, the Ensembl release 111 GTF annotation, the VEP cache and plugins
-  (release 111), REVEL scores, the Ensembl known-variants VCFs, and the HPRC
-  v1.1 human pangenome graph.
+- **Reference data (none to prepare, or provide your own)** — by default all
+  reference resources are downloaded by the workflow itself into `resources/`,
+  exactly like upstream: the GRCh38 primary assembly FASTA (Ensembl release
+  111) plus `.fai`/`.dict` indices, the Ensembl release 111 GTF annotation,
+  the VEP cache and plugins (release 111), REVEL scores, the Ensembl
+  known-variants VCFs, and the HPRC v1.1 human pangenome graph (~5 GB total;
+  requires unimpeded network access to ensembl.org, zenodo.org and the AWS
+  human-pangenomics bucket). To use pre-downloaded databases instead, place
+  them at the paths the `ref::` rules declare (see `modules/ref.oxoflow`
+  `output =` lines) and run with `skip_ref_downloads=true`.
 - **Compute** — up to 96 CPUs / 32 GB per rule (freebayes candidate calling:
   96 threads; vg giraffe mapping: 64 threads; samtools sort: 16 threads / 32G;
   Varlociraptor calling: 8G).
