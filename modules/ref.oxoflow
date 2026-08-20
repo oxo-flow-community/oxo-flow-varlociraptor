@@ -211,7 +211,7 @@ name = "transform_gene_annotations"
 description = "Extract gene coordinates from the GTF (scripts/transform_gene_regions.py)"
 input = ["resources/annotation.gtf"]
 output = ["resources/gene_annotation.bed"]
-shell = "python scripts/transform_gene_regions.py {input} {output} {log}"
+shell = "python scripts/transform_gene_regions.py {input} --output {output} --log {log}"
 log = "logs/plot_coverage/transform_gene_regions.log"
 
 [rules.environment]
