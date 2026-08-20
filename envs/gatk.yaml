@@ -6,4 +6,8 @@ channels:
   - bioconda
 dependencies:
   - bioconda::gatk4=4.4.0.0
+  # openjdk 17: Spark 3.5 user lookup breaks on Java 23+ (Subject.getSubject
+  # removed — live: getCurrentUser UnsupportedOperationException via a stale
+  # fallback env running JDK 25); pin so re-solves never drift to a newer JDK
+  - conda-forge::openjdk=17
   - bioconda::samtools=1.17
