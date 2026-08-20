@@ -78,11 +78,14 @@ description = "Fix pangenome contig names, fixmate, and add the read group"
 input = ["results/mapped/vg/SRR702070.raw.bam"]
 output = ["results/mapped/vg/SRR702070.bam"]
 shell = """
+# fresh-dir semantics: a failed attempt leaves a 0-byte output that the
+# engine treats as up-to-date (live: sort_alignments could not read the header)
+rm -f {output}
 (samtools view {input} -H | \
  sed -E 's/(SN:GRCh38#0#chr)/SN:/; s/SN:M/SN:MT/' | \
  samtools reheader - {input} | \
  samtools fixmate - - | \
- samtools -r "@RG\\tID:SRR702070\\tSM:SRR702070\\tPL:ILLUMINA"") > {output} 2> {log}
+ samtools addreplacerg - -r "@RG\\tID:SRR702070\\tSM:SRR702070\\tPL:ILLUMINA") > {output} 2> {log}
 """
 log = "logs/reheader/SRR702070.log"
 
