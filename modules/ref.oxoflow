@@ -252,7 +252,7 @@ name = "tabix_variation"
 description = "Index the known-variants VCF (tabix -p vcf)"
 input = ["resources/variation.vcf.gz"]
 output = ["resources/variation.vcf.gz.tbi"]
-shell = "tabix -p vcf {input} 2> {log}"
+shell = "tabix -f -p vcf {input} 2> {log}"
 log = "logs/tabix/variation.log"
 
 [rules.environment]
@@ -263,7 +263,7 @@ name = "tabix_noiupac"
 description = "Index the IUPAC-fixed known-variants VCF (tabix -p vcf)"
 input = ["resources/variation.noiupac.vcf.gz"]
 output = ["resources/variation.noiupac.vcf.gz.tbi"]
-shell = "tabix -p vcf {input} 2> {log}"
+shell = "tabix -f -p vcf {input} 2> {log}"
 log = "logs/tabix/variation.noiupac.log"
 
 [rules.environment]
@@ -274,7 +274,7 @@ name = "tabix_revel"
 description = "Index the REVEL scores TSV (tabix -s 1 -b 3 -e 3, GRCh38)"
 input = ["resources/revel_scores.tsv.gz"]
 output = ["resources/revel_scores.tsv.gz.tbi"]
-shell = "tabix -s 1 -b 3 -e 3 {input} 2> {log}"
+shell = "tabix -f -s 1 -b 3 -e 3 {input} 2> {log}"
 log = "logs/tabix/revel_scores.log"
 
 [rules.environment]
