@@ -82,7 +82,7 @@ shell = """
  sed -E 's/(SN:GRCh38#0#chr)/SN:/; s/SN:M/SN:MT/' | \
  samtools reheader - {input} | \
  samtools fixmate - - | \
- samtools addreplacerg - -r "'@RG\\tID:SRR702070\\tSM:SRR702070\\tPL:ILLUMINA'") > {output} 2> {log}
+ samtools -r "@RG\\tID:SRR702070\\tSM:SRR702070\\tPL:ILLUMINA"") > {output} 2> {log}
 """
 log = "logs/reheader/SRR702070.log"
 
