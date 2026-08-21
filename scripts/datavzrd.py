@@ -15,6 +15,7 @@ upstream wrapper semantics (process_yaml with require_use_yte=True, then
 import argparse
 import json
 import subprocess
+from types import SimpleNamespace
 import sys
 import tempfile
 
@@ -31,10 +32,23 @@ def rebuild_frame(encoded):
     return frame
 
 
+def to_namespace(value):
+    # The yte templates use attribute access (?input.csv, ?wildcards.group) —
+    # plain JSON dicts do not support it (live: yte YteError "dict object
+    # has no attribute csv"). Recursively wrap dicts in SimpleNamespace.
+    if isinstance(value, dict):
+        return SimpleNamespace(**{k: to_namespace(v) for k, v in value.items()})
+    if isinstance(value, list):
+        return [to_namespace(v) for v in value]
+    return value
+
+
 def rebuild_variables(variables):
     for key, value in variables.items():
         if isinstance(value, dict) and set(value.keys()) >= {"columns", "data"}:
             variables[key] = rebuild_frame(value)
+        else:
+            variables[key] = to_namespace(value)
     return variables
 
 
