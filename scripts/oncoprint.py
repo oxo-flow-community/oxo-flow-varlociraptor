@@ -240,10 +240,6 @@ def main():
         sys.stderr = open(args.log, "w")
 
     groups = json.loads(args.groups)
-    labels_data = json.loads(args.labels)
-    labels_df = pd.DataFrame(
-        labels_data["data"], columns=labels_data["columns"]
-    ).set_index(labels_data.get("index", labels_data["columns"][:1]))
 
     calls = pd.concat(
         [
@@ -251,6 +247,11 @@ def main():
             for path, sample in zip(args.calls, groups)
         ]
     )
+
+    labels_data = json.loads(args.labels)
+    labels_df = pd.DataFrame(
+        labels_data["data"], columns=labels_data["columns"]
+    ).set_index(labels_data.get("index", labels_data["columns"][:1]))
 
     if calls.empty:
         # no candidate variants (the live fixture yields none): emit an
