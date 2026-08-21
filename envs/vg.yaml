@@ -1,7 +1,11 @@
-# vg — pinned exactly to the upstream envs/vg.yaml.
+# vg — pinned to the upstream envs/vg.yaml, plus samtools (deviation):
+# the map_reads_vg rule pipes "vg giraffe | samtools view" under this env;
+# upstream assumes a host samtools, the port carries its own so the rule is
+# self-contained on hosts without it (live: exit 127 on bioinfo-wsx).
 name: vg
 channels:
   - conda-forge
   - bioconda
 dependencies:
   - bioconda::vg=1.73.0
+  - bioconda::samtools=1.17
