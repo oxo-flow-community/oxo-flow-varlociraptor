@@ -42,7 +42,9 @@ rm -rf "$tmpdir"
 log = "logs/freebayes/SRR702070_group.log"
 
 [rules.resources]
-threads = 96
+# upstream runs on a 96-core cluster; scale to the machine instead of
+# hardcoding (live: resource exhausted on the 64-core box)
+threads = {effective_threads}
 
 [rules.environment]
 conda = "envs/freebayes.yaml"
