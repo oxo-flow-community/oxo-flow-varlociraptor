@@ -33,7 +33,7 @@ input = [
 output = ["results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.bcf"]
 shell = '''
 tmpdir=$(mktemp -d) && \
-(freebayes-parallel <(bedtools intersect -a <(sed 's:\([0-9]*\):\([0-9]*\)-\([0-9]*\)$:\1\t\2\t\3:' <(fasta_generate_regions.py {input[1]} 100000)) -b {input[2]} | sed 's/\t\([0-9]*\)\t\([0-9]*\)$/:\1-\2/') 96 \
+(freebayes-parallel <(bedtools intersect -a <(sed 's#\([0-9]*\):\([0-9]*\)-\([0-9]*\)$#\1\t\2\t\3#' <(fasta_generate_regions.py {input[1]} 100000)) -b {input[2]} | sed 's/\t\([0-9]*\)\t\([0-9]*\)$/:\1-\2/') 96 \
   --fasta-reference {input[0]} --pooled-continuous --min-alternate-count 2 --min-alternate-fraction 0.05 {input[3]} \
   | bcftools sort --max-mem 205M --temp-dir "$tmpdir" \
   | bcftools view --threads 95 --output {output} --output-type b) 2> {log} && \
