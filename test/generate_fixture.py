@@ -40,7 +40,10 @@ with open(FASTA) as fh:
 
 if "21" not in seq:
     raise SystemExit(f"contig 21 not in {FASTA}: {sorted(seq)[:5]}...")
-window = seq["21"][:100000]  # first 100kb of chr21
+# chr21[15_000_000:15_100_000]: sampled windows were tested live —
+# 5.0-5.1Mb maps to a paralog at MAPQ 3 (repeat-rich p-arm), while
+# 15.0-15.1Mb maps uniquely (192/200 probe reads at MAPQ 60).
+window = seq["21"][15_000_000:15_100_000]
 n = len(window)
 
 rng = random.Random(SEED)
