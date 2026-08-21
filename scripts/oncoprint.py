@@ -252,6 +252,17 @@ def main():
         ]
     )
 
+    if calls.empty:
+        # no candidate variants (the live fixture yields none): emit an
+        # empty gene oncoprint and empty variant dir instead of crashing
+        # on the MultiIndex construction below
+        os.makedirs(args.sortings_dir, exist_ok=True)
+        os.makedirs(args.variants_dir, exist_ok=True)
+        pd.DataFrame(columns=["symbol", "vartype", "consequence", "group"]).to_csv(
+            args.gene_oncoprint, sep="	", index=False
+        )
+        sys.exit(0)
+
     gene_oncoprint_df = gene_oncoprint(calls, groups)
 
     group_annotation = load_group_annotation(groups)
