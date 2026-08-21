@@ -1,10 +1,13 @@
-# datavzrd + yte — pinned to the datavzrd v9.14.0 wrapper environment.
+# datavzrd + yte — pinned to the datavzrd v9.14.0 wrapper environment
+# with one deviation: datavzrd is a conda-forge package (the bioconda
+# prefix never had it) and 2.70.0 is gone from the channel (live:
+# PackagesNotFoundError), so it is pinned to conda-forge::2.71.0.
 name: datavzrd
 channels:
   - conda-forge
   - bioconda
 dependencies:
-  - bioconda::datavzrd=2.70.0
+  - conda-forge::datavzrd=2.71.0
   - conda-forge::yte
   - conda-forge::numpy
   - conda-forge::pandas
