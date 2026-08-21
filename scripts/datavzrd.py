@@ -36,7 +36,12 @@ def to_namespace(value):
     # The yte templates use attribute access (?input.csv, ?wildcards.group) —
     # plain JSON dicts do not support it (live: yte YteError "dict object
     # has no attribute csv"). Recursively wrap dicts in SimpleNamespace.
+    # Frame-encoded dicts ({"columns", "data"}) become DataFrames at any
+    # nesting level — the templates use pandas .loc on them (live:
+    # SimpleNamespace has no attribute loc on params.samples).
     if isinstance(value, dict):
+        if set(value.keys()) >= {"columns", "data"}:
+            return rebuild_frame(value)
         return SimpleNamespace(**{k: to_namespace(v) for k, v in value.items()})
     if isinstance(value, list):
         return [to_namespace(v) for v in value]
