@@ -248,11 +248,6 @@ def main():
         ]
     )
 
-    labels_data = json.loads(args.labels)
-    labels_df = pd.DataFrame(
-        labels_data["data"], columns=labels_data["columns"]
-    ).set_index(labels_data.get("index", labels_data["columns"][:1]))
-
     if calls.empty:
         # no candidate variants (the live fixture yields none): emit an
         # empty gene oncoprint and empty variant dir instead of crashing
@@ -263,6 +258,11 @@ def main():
             args.gene_oncoprint, sep="	", index=False
         )
         sys.exit(0)
+
+    labels_data = json.loads(args.labels)
+    labels_df = pd.DataFrame(
+        labels_data["data"], columns=labels_data["columns"]
+    ).set_index(labels_data.get("index", labels_data["columns"][:1]))
 
     gene_oncoprint_df = gene_oncoprint(calls, groups)
 
