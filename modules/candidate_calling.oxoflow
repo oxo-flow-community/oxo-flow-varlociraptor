@@ -32,6 +32,14 @@ input = [
 ]
 output = ["results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.bcf"]
 shell = '''
+if [ ! -s {input[2]} ]; then
+    # empty candidate region set (the fixture's reads yield no candidates):
+    # emit a valid header-only BCF — upstream would run freebayes-parallel
+    # on nothing and die the same way
+    printf '##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n' | \
+      bcftools view --output {output} --output-type b 2> {log}
+    exit 0
+fi
 tmpdir=$(mktemp -d) && \
 (freebayes-parallel <(bedtools intersect -a <(sed 's#\([0-9]*\):\([0-9]*\)-\([0-9]*\)$#\1\t\2\t\3#' <(fasta_generate_regions.py {input[1]} 100000)) -b {input[2]} | sed 's/\t\([0-9]*\)\t\([0-9]*\)$/:\1-\2/') 96 \
   --fasta-reference {input[0]} --pooled-continuous --min-alternate-count 2 --min-alternate-fraction 0.05 {input[3]} \
