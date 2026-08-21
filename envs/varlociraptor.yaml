@@ -1,9 +1,12 @@
-# Varlociraptor — pinned exactly to the upstream envs/varlociraptor.yaml.
+# Varlociraptor — pinned to the upstream envs/varlociraptor.yaml with one
+# deviation: vega-lite-cli is a conda-forge package and 5.16 is no longer
+# on the channel (live: PackagesNotFoundError on env setup), so it is
+# pinned to conda-forge::6.4.3.
 name: varlociraptor
 channels:
   - conda-forge
   - bioconda
 dependencies:
   - bioconda::varlociraptor=8.9.5
-  - bioconda::vega-lite-cli=5.16
+  - conda-forge::vega-lite-cli=6.4.3
   - bioconda::bcftools=1.21
