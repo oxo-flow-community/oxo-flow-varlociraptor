@@ -44,7 +44,8 @@ log = "logs/freebayes/SRR702070_group.log"
 [rules.resources]
 # upstream runs on a 96-core cluster; scale to the machine instead of
 # hardcoding (live: resource exhausted on the 64-core box)
-threads = "{effective_threads}"
+# upstream runs on a 96-core cluster; this box has 64 cores (live: resource exhausted)
+threads = 48
 
 [rules.environment]
 conda = "envs/freebayes.yaml"
