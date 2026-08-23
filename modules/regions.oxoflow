@@ -104,7 +104,7 @@ conda = "envs/awk_bedtools.yaml"
 name = "download_delly_excluded_regions"
 description = "Download delly's excluded regions for hg38"
 output = ["results/regions/human.hg38.delly_excluded.bed"]
-shell = "curl https://raw.githubusercontent.com/dellytools/delly/main/excludeTemplates/human.hg38.excl.tsv -o {output} &> {log}"
+shell = "curl https://raw.githubusercontent.com/dellytools/delly/main/excludeTemplates/human.hg38.excl.tsv -o {output} &> {log} || curl https://ghfast.top/https://raw.githubusercontent.com/dellytools/delly/main/excludeTemplates/human.hg38.excl.tsv -o {output} &> {log}"
 log = "logs/download_delly_regions/human_hg38.log"
 
 [rules.environment]
