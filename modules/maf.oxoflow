@@ -1,0 +1,135 @@
+# MAF export (upstream workflow/rules/maf.smk).
+#
+# Rule map (upstream rule -> this module):
+#   group_bcf_to_vcf -> maf::group_bcf_to_vcf_{variants,fusions}
+#                       (bcftools view v3.8.0 wrapper)
+#   group_vcf_to_maf -> maf::group_vcf_to_maf_{variants,fusions}
+#                       (vcf2maf.pl, envs/vcf2maf.yaml)
+#
+# Deviations (details in README.md):
+#   * The upstream wildcards event (fdr-control events, default some_id) and
+#     calling_type (the default event covers variants + fusions) are frozen to
+#     event=some_id x calling_type=variants/fusions, one rule pair per type.
+#   * The fusions pair consumes
+#     results/final-calls/{group}/{group}.some_id.fusions.fdr-controlled.bcf,
+#     which the port does not produce (the fusions varlociraptor calling /
+#     FDR-control branch of calling.smk + filtering.smk is not ported — the
+#     fusion module only ports the star_arriba candidate-calling front end).
+#   * params are the RESOLVED values of the common.smk helper functions for
+#     the frozen wildcards (see derivation comments below):
+#       - genome_build = config ref/build = GRCh38
+#       - species = config ref/species = homo_sapiens
+#       - ann_fields = get_annotation_fields_for_tables: the 15 fixed fields
+#         + tables/output/annotation_fields (default [EXON]) + REVEL (the
+#         default final_calls plugins LoFtool + REVEL contain "REVEL").
+#       - format_fields = get_format_fields_for_tables: [AF, AFD, DP]; the
+#         fusions calling_type additionally adds [SROBS, SAOBS]
+#         (short_observations default false, but calling_type == "fusions").
+#       - info_fields = get_info_prob_fields_for_tables +
+#         get_info_fusion_fields_for_tables: with tables/output/event_prob
+#         true (upstream default), the scenario's event keys (from the
+#         port's pre-rendered resources/scenarios/SRR702070_group.yaml:
+#         somatic_tumor_low, somatic_tumor_medium, somatic_tumor_high,
+#         somatic_normal, germline_hom, germline_het) plus artifact, absent;
+#         the fusions calling_type adds MATEID, GENE_NAME, GENE_ID,
+#         EXON_NUMBER.
+#       - vcf_primary_alias = "tumor" (maf/primary_alias default), no
+#         control_alias -> no --vcf-normal-id/--normal-id.
+#   * The shell is the upstream vcf2maf.pl command verbatim, including the
+#     trailing WARNING grep check (it fails the rule when vcf2maf reports a
+#     missing genotype column other than the NORMAL one).
+
+[workflow]
+name = "maf"
+
+# ---- upstream rule: group_bcf_to_vcf (variants) -----------------------------
+# bcftools view v3.8.0 wrapper: bcftools view -O v -o {output} {input}.
+[[rules]]
+name = "group_bcf_to_vcf_variants"
+description = "Convert the FDR-controlled variants callset to VCF (bcftools view v3.8.0 wrapper)"
+when = "config.maf_activate"
+input = ["results/final-calls/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.bcf"]
+output = ["results/maf/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.vcf"]
+shell = "bcftools view -O v -o {output} {input} 2> {log}"
+log = "logs/maf/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: group_bcf_to_vcf (fusions) ------------------------------
+[[rules]]
+name = "group_bcf_to_vcf_fusions"
+description = "Convert the FDR-controlled fusions callset to VCF (bcftools view v3.8.0 wrapper)"
+when = "config.maf_activate"
+input = ["results/final-calls/SRR702070_group/SRR702070_group.some_id.fusions.fdr-controlled.bcf"]
+output = ["results/maf/SRR702070_group/SRR702070_group.some_id.fusions.fdr-controlled.vcf"]
+shell = "bcftools view -O v -o {output} {input} 2> {log}"
+log = "logs/maf/SRR702070_group/SRR702070_group.some_id.fusions.fdr-controlled.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: group_vcf_to_maf (variants) -----------------------------
+[[rules]]
+name = "group_vcf_to_maf_variants"
+description = "Convert the variants VCF to MAF with vcf2maf.pl (--inhibit-vep)"
+when = "config.maf_activate"
+input = [
+    "results/maf/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.vcf",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "results/scenarios/SRR702070_group.yaml",
+]
+output = ["results/maf/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.maf"]
+shell = """
+vcf2maf.pl --inhibit-vep \
+  --retain-ann Amino_acids,CANONICAL,CLIN_SIG,Consequence,Feature,Gene,gnomADg_AF,HGVSc,HGVSg,HGVSp,IMPACT,MANE_PLUS_CLINICAL,Protein_position,SWISSPROT,SYMBOL,EXON,REVEL \
+  --retain-fmt AF,AFD,DP \
+  --retain-info somatic_tumor_low,somatic_tumor_medium,somatic_tumor_high,somatic_normal,germline_hom,germline_het,artifact,absent \
+  --ncbi-build GRCh38 \
+  --species homo_sapiens \
+  --vcf-tumor-id tumor \
+  --input-vcf {input[0]} \
+  --output-maf {output} \
+  --ref-fasta {input[1]} \
+  --tumor-id SRR702070_group_tumor \
+  2>{log};
+! (grep -v "WARNING: No genotype column for NORMAL in VCF!" {log} | \
+   grep "WARNING: No genotype column for")
+"""
+log = "logs/maf/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.log"
+
+[rules.environment]
+conda = "envs/vcf2maf.yaml"
+
+# ---- upstream rule: group_vcf_to_maf (fusions) ------------------------------
+# retain-fmt/info follow the fusions calling_type helper resolution (header).
+[[rules]]
+name = "group_vcf_to_maf_fusions"
+description = "Convert the fusions VCF to MAF with vcf2maf.pl (--inhibit-vep)"
+when = "config.maf_activate"
+input = [
+    "results/maf/SRR702070_group/SRR702070_group.some_id.fusions.fdr-controlled.vcf",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "results/scenarios/SRR702070_group.yaml",
+]
+output = ["results/maf/SRR702070_group/SRR702070_group.some_id.fusions.fdr-controlled.maf"]
+shell = """
+vcf2maf.pl --inhibit-vep \
+  --retain-ann Amino_acids,CANONICAL,CLIN_SIG,Consequence,Feature,Gene,gnomADg_AF,HGVSc,HGVSg,HGVSp,IMPACT,MANE_PLUS_CLINICAL,Protein_position,SWISSPROT,SYMBOL,EXON,REVEL \
+  --retain-fmt AF,AFD,DP,SROBS,SAOBS \
+  --retain-info somatic_tumor_low,somatic_tumor_medium,somatic_tumor_high,somatic_normal,germline_hom,germline_het,artifact,absent,MATEID,GENE_NAME,GENE_ID,EXON_NUMBER \
+  --ncbi-build GRCh38 \
+  --species homo_sapiens \
+  --vcf-tumor-id tumor \
+  --input-vcf {input[0]} \
+  --output-maf {output} \
+  --ref-fasta {input[1]} \
+  --tumor-id SRR702070_group_tumor \
+  2>{log};
+! (grep -v "WARNING: No genotype column for NORMAL in VCF!" {log} | \
+   grep "WARNING: No genotype column for")
+"""
+log = "logs/maf/SRR702070_group/SRR702070_group.some_id.fusions.fdr-controlled.log"
+
+[rules.environment]
+conda = "envs/vcf2maf.yaml"

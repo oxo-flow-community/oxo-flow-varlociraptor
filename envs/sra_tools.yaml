@@ -1,0 +1,10 @@
+# sra-tools + pigz — pins from the snakemake-wrappers v7.6.0
+# bio/sra-tools/fasterq-dump wrapper environment.yaml (upstream get_sra
+# has no conda: directive; the wrapper env is used implicitly).
+name: sra_tools
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - sra-tools =3.2.1
+  - pigz =2.8

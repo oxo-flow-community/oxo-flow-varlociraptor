@@ -1,0 +1,11 @@
+# bwa + samtools — core pins from the snakemake-wrappers v3.8.0
+# bio/bwa/mem wrapper environment.yaml (upstream bwa rules have no conda:
+# directive). fgbio/picard-slim from the wrapper env are not needed by the
+# port's plain shell commands.
+name: bwa
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bwa =0.7.17
+  - samtools =1.19.2

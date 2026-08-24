@@ -1,0 +1,8 @@
+# fastp — pin from the snakemake-wrappers v6.2.0 bio/fastp wrapper
+# environment.yaml (upstream fastp rules have no conda: directive).
+name: fastp
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - fastp =0.24.1

@@ -1,0 +1,161 @@
+# Primer assignment and trimming (upstream workflow/rules/primers.smk).
+#
+# Rule map (upstream rule -> this module):
+#   assign_primers            -> primers::assign_primers            (fgbio)
+#   filter_primerless_reads   -> primers::filter_primerless_reads   (scripts/filter_primers.rs)
+#   trim_primers              -> primers::trim_primers              (fgbio)
+#   map_primers               -> primers::map_primers               (bwa mem v2.13.0 wrapper)
+#   filter_unmapped_primers   -> primers::filter_unmapped_primers   (samtools view v9.15.0 wrapper)
+#   primer_to_bed             -> primers::primer_to_bed             (samtools sort -n | bamToBed)
+#   build_primer_regions      -> primers::build_primer_regions      (scripts/build_primer_regions.py)
+#
+# Deviations (details in README.md):
+#   * The upstream panel wildcard is frozen to "uniform" (upstream default
+#     when no primer panels are configured; get_panel_primer_input returns
+#     config primers/trimming/primers_fa{1,2}).
+#   * get_primer_extra adds -T/-k only when the shortest primer is <32/19 bp;
+#     the port inlines the base extra (-R/-L 100) and documents the
+#     conditional flags as omitted.
+#   * map_primers needs the genome bwa index of upstream ref.smk bwa_index,
+#     ported in modules/mapping_bwa.oxoflow (gated on bwa_align_activate ||
+#     primers_activate there).
+#   * Environment: map_primers has no upstream conda directive (bwa mem
+#     wrapper env = bwa 0.7.17 + samtools); the port pins that wrapper
+#     environment explicitly as envs/bwa.yaml.
+#   * The primer-trimmed BAM (results/trimmed/{sample}.trimmed.bam) is the
+#     upstream input of the dedup/consensus flow; that re-wiring is not part
+#     of the default port path (the default path reads results/dedup directly).
+
+[workflow]
+name = "primers"
+
+# ---- upstream rule: assign_primers ------------------------------------------
+[[rules]]
+name = "assign_primers"
+description = "Assign reads to primer pairs (fgbio AssignPrimers)"
+when = "config.primers_activate"
+input = [
+    "results/dedup/SRR702070.bam",
+    "results/primers/uniform_primer_regions.tsv",
+]
+output = [
+    "results/primers/SRR702070.assigned.bam",
+    "results/primers/SRR702070.metric.bam",
+]
+shell = "fgbio AssignPrimers -i {input[0]} -p {input[1]} -m {output[1]} -o {output[0]} &> {log}"
+log = "logs/primers/assignment/SRR702070.log"
+
+[rules.environment]
+conda = "envs/fgbio.yaml"
+
+# ---- upstream rule: filter_primerless_reads ---------------------------------
+# Adapted to argv: filter_primers.rs INPUT BAM --primers OUT --primerless OUT
+# (upstream snakemake script API replaced by positional args; stderr is
+# captured by the shell's 2> {log} instead of the script's redirect_stderr).
+[[rules]]
+name = "filter_primerless_reads"
+description = "Split assigned from primerless reads (scripts/filter_primers.rs)"
+when = "config.primers_activate"
+input = ["results/primers/SRR702070.assigned.bam"]
+output = [
+    "results/primers/SRR702070.primers.bam",
+    "results/primers/SRR702070.primerless.bam",
+]
+shell = "rust-script scripts/filter_primers.rs {input} --primers {output[0]} --primerless {output[1]} 2> {log}"
+log = "logs/primers/filter/SRR702070.log"
+
+[rules.environment]
+conda = "envs/filter_reads.yaml"
+
+# ---- upstream rule: trim_primers --------------------------------------------
+# -H (hard clip), sort order Coordinate, --first-of-pair for single-end
+# primer fasta (get_single_primer_flag -> uniform panel without fa2).
+[[rules]]
+name = "trim_primers"
+description = "Hard-clip primer sequences (fgbio TrimPrimers -H)"
+when = "config.primers_activate"
+input = [
+    "results/primers/SRR702070.primers.bam",
+    "results/primers/uniform_primer_regions.tsv",
+]
+output = ["results/trimmed/SRR702070.trimmed.bam"]
+shell = "fgbio TrimPrimers -H -i {input[0]} -p {input[1]} -s Coordinate --first-of-pair -o {output} &> {log}"
+log = "logs/trimming/SRR702070.log"
+
+[rules.environment]
+conda = "envs/fgbio.yaml"
+
+# ---- upstream rule: map_primers ---------------------------------------------
+# bwa mem v2.13.0 wrapper, sorting none. The genome index is the
+# mapping_bwa::bwa_index output; get_primer_extra resolves to the base
+# "-R '@RG\\tID:uniform\\tSM:uniform' -L 100" (the conditional -T/-k flags for
+# primers shorter than 32/19 bp are omitted — see header).
+[[rules]]
+name = "map_primers"
+description = "Map primer sequences to the reference (bwa mem v2.13.0 wrapper)"
+when = "config.primers_activate"
+input = [
+    "{config.primers_fa1}",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.amb",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.ann",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.bwt",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.pac",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.sa",
+]
+output = ["results/primers/uniform_primers.bam"]
+shell = """
+(bwa mem -t 8 -R '@RG\\tID:uniform\\tSM:uniform' -L 100 \
+  resources/genome.dna.homo_sapiens.GRCh38.111 {input[0]} \
+  | samtools view -b) > {output} 2> {log}
+"""
+log = "logs/bwa_mem/uniform.log"
+
+[rules.resources]
+threads = 8
+
+[rules.environment]
+conda = "envs/bwa.yaml"
+
+# ---- upstream rule: filter_unmapped_primers ---------------------------------
+# samtools view v9.15.0 wrapper with get_filter_params = "-b -F 4" (uniform
+# panel with a single-end primer fasta: not a list, so keep mapped pairs).
+[[rules]]
+name = "filter_unmapped_primers"
+description = "Drop unmapped primer alignments (samtools view -F 4)"
+when = "config.primers_activate"
+input = ["results/primers/uniform_primers.bam"]
+output = ["results/primers/uniform_primers.filtered.bam"]
+shell = "samtools view -b -F 4 {input} > {output} 2> {log}"
+log = "logs/primers/uniform_primers_filtered.log"
+
+[rules.environment]
+conda = "envs/samtools.yaml"
+
+# ---- upstream rule: primer_to_bed -------------------------------------------
+# ext frozen to "bed" (get_primer_bed: uniform panel without primers_fa2 ->
+# bed, not bedpe); the format param is empty for bed.
+[[rules]]
+name = "primer_to_bed"
+description = "Convert mapped primers to a BED file (samtools sort -n | bamToBed)"
+when = "config.primers_activate"
+input = ["results/primers/uniform_primers.filtered.bam"]
+output = ["results/primers/uniform_primers.bed"]
+shell = "samtools sort -n {input} | bamToBed -i - > {output} 2> {log}"
+log = "logs/primers/uniform_primers_bed.log"
+
+[rules.environment]
+conda = "envs/bedtools.yaml"
+
+# ---- upstream rule: build_primer_regions ------------------------------------
+# Adapted to argv: build_primer_regions.py BED --output TSV --log LOG.
+[[rules]]
+name = "build_primer_regions"
+description = "Build the primer regions table (scripts/build_primer_regions.py)"
+when = "config.primers_activate"
+input = ["results/primers/uniform_primers.bed"]
+output = ["results/primers/uniform_primer_regions.tsv"]
+shell = "python scripts/build_primer_regions.py {input} --output {output} --log {log}"
+log = "logs/primers/build_uniform_primer_regions.log"
+
+[rules.environment]
+conda = "envs/pystats.yaml"

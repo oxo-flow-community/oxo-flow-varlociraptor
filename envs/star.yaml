@@ -1,0 +1,8 @@
+# star — pin from the snakemake-wrappers v8.0.0 bio/star/align wrapper
+# environment.yaml (the star_arriba meta wrapper's star rules use it).
+name: star
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - star =2.7.11b

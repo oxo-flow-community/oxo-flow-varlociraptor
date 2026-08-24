@@ -33,6 +33,68 @@ reads_dir = "test/fixtures/raw"
 skip_ref_downloads = false
 
 # ---------------------------------------------------------------------------
+# Gated branch modules (all off by default; the default path is unchanged).
+# Each key maps to an upstream config section, see the module headers.
+# ---------------------------------------------------------------------------
+
+# upstream config: trimming (get_sra / fastp rules). The default path has no
+# trimming configured — reads pass through mapping::merge_trimmed_fastqs.
+trimming_activate = false
+
+# upstream config: primers/trimming (rules assign_primers ... build_primer_regions).
+# primers_fa1/primers_fa2 are the upstream primers/trimming/primers_fa{1,2} fasta
+# files (empty upstream default = primers flow off); fa2 empty means single-end
+# primer fasta.
+primers_activate = false
+primers_fa1 = ""
+primers_fa2 = ""
+
+# upstream config: maf/activate (group_bcf_to_vcf + group_vcf_to_maf).
+maf_activate = false
+
+# upstream config: population/db/activate + path/alias/fdr/events
+# (rules clean_population_db / population_filter_variants / population_db_update).
+population_db_activate = false
+population_db_path = "resources/population_db.variants.bcf"
+population_db_alias = "tumor"
+population_db_fdr = 0.05
+population_db_events = "somatic_tumor_high,somatic_tumor_medium"
+
+# upstream config: linear-reference (bwa) aligner branch of mapping.smk
+# (map_reads_bwa + ref.smk bwa_index). The default path aligns with vg
+# giraffe to the pangenome (ref/pangenome/activate = true upstream).
+bwa_align_activate = false
+
+# upstream config: mutational_burden/activate + events
+# (calculate_covered_coding_sites + estimate_mutational_burden; events are
+# comma-joined, split to space-separated in the rule shells).
+mutational_burden_activate = false
+mutational_burden_events = "somatic_tumor_low,somatic_tumor_medium,somatic_tumor_high"
+
+# upstream config: mutational_signatures/activate
+# (create_mutational_context_file ... plot_mutational_signatures; upstream
+# default events = [some_id], samples = [tumor], frozen in the module).
+mutational_signatures_activate = false
+
+# upstream config: benchmarking (Snakefile rule benchmark / benchmarking.smk;
+# the CHM1 sample and chm-eval-kit downloads are excluded, see module header).
+benchmarking_activate = false
+
+# upstream config: plugins (download_cadd_scores_for_vep; download_revel and
+# process_revel_scores are already ported in ref.oxoflow). cadd_build /
+# cadd_version / cadd_variant_type are the upstream wildcards of the same
+# rule with their upstream defaults.
+plugins_activate = false
+cadd_build = "GRCh38"
+cadd_version = "v1.7"
+cadd_variant_type = "snv"
+
+# upstream config: fusion calling branch (fusion_calling.smk star_arriba
+# meta wrapper: star_index / star_align / arriba / annotate_exons /
+# convert_fusions / sort_arriba_calls / bcftools_concat_candidates).
+fusion_activate = false
+
+# ---------------------------------------------------------------------------
 # Sample groups (upstream config/samples.tsv: SRR702070 -> SRR702070_group,
 # alias "tumor", platform ILLUMINA, purity 1.0, datatype dna, calling variants)
 # ---------------------------------------------------------------------------
@@ -82,3 +144,44 @@ namespace = "table"
 [[include]]
 path = "modules/report.oxoflow"
 namespace = "report"
+
+# ---------------------------------------------------------------------------
+# Gated branch modules (rules are namespaced as <namespace>::<rule_name> and
+# gated via `when = "config.<key>"`; validate counts them unconditionally,
+# the executor skips them at run time when the key is false)
+# ---------------------------------------------------------------------------
+[[include]]
+path = "modules/trimming.oxoflow"
+namespace = "trimming"
+
+[[include]]
+path = "modules/primers.oxoflow"
+namespace = "primers"
+
+[[include]]
+path = "modules/maf.oxoflow"
+namespace = "maf"
+
+[[include]]
+path = "modules/population.oxoflow"
+namespace = "population"
+
+[[include]]
+path = "modules/plugins.oxoflow"
+namespace = "plugins"
+
+[[include]]
+path = "modules/benchmarking.oxoflow"
+namespace = "benchmarking"
+
+[[include]]
+path = "modules/mapping_bwa.oxoflow"
+namespace = "mapping_bwa"
+
+[[include]]
+path = "modules/burden_signatures.oxoflow"
+namespace = "burden_signatures"
+
+[[include]]
+path = "modules/fusion.oxoflow"
+namespace = "fusion"

@@ -1,0 +1,75 @@
+# Linear-reference (bwa) alignment branch (upstream ref.smk bwa_index and
+# mapping.smk map_reads_bwa; the default path aligns with vg giraffe to the
+# pangenome instead).
+#
+# Rule map (upstream rule -> this module):
+#   bwa_index     -> mapping_bwa::bwa_index   (bwa index v2.3.2 wrapper)
+#   map_reads_bwa -> mapping_bwa::map_reads_bwa (bwa mem v3.8.0 wrapper)
+#
+# Deviations (details in README.md):
+#   * bwa_index is gated on `config.bwa_align_activate || config.primers_activate`
+#     because primers::map_primers consumes the same genome index.
+#   * The bwa mem v3.8.0 wrapper is used with sorting=none (upstream), so the
+#     pipe is `bwa mem ... | samtools view -b`.
+#   * get_map_reads_input freezes to the port's merged reads
+#     (results/merged/SRR702070_R{1,2}.fastq.gz, the mapping module outputs),
+#     and the read group to "@RG\\tID:SRR702070\\tSM:SRR702070\\tPL:ILLUMINA"
+#     (platform ILLUMINA from config/samples.tsv).
+#   * The index prefix is the frozen genome resource name without its .fasta
+#     extension (the wrapper strips the extension of idx[0] upstream).
+#   * Environment: upstream map_reads_bwa and bwa_index have no `conda:`
+#     directive (wrapper envs bwa 0.7.17 + samtools / bwa are used implicitly).
+#     The port pins the same wrapper environment explicitly: envs/bwa.yaml
+#     (bwa 0.7.17 + samtools 1.19.2).
+
+[workflow]
+name = "mapping_bwa"
+
+# ---- upstream rule: bwa_index (ref.smk) -------------------------------------
+# bwa index v2.3.2 wrapper: bwa index -p {prefix} {input}.
+[[rules]]
+name = "bwa_index"
+description = "Build the bwa index of the reference genome (bwa index v2.3.2 wrapper)"
+when = "config.bwa_align_activate || config.primers_activate"
+input = ["resources/genome.dna.homo_sapiens.GRCh38.111.fasta"]
+output = [
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.amb",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.ann",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.bwt",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.pac",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.sa",
+]
+shell = "bwa index -p resources/genome.dna.homo_sapiens.GRCh38.111 {input} 2> {log}"
+log = "logs/bwa_index.log"
+
+[rules.environment]
+conda = "envs/bwa.yaml"
+
+# ---- upstream rule: map_reads_bwa (mapping.smk) -----------------------------
+# bwa mem v3.8.0 wrapper, sorting none.
+[[rules]]
+name = "map_reads_bwa"
+description = "Map reads to the linear reference (bwa mem v3.8.0 wrapper)"
+when = "config.bwa_align_activate"
+input = [
+    "results/merged/SRR702070_R1.fastq.gz",
+    "results/merged/SRR702070_R2.fastq.gz",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.amb",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.ann",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.bwt",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.pac",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.sa",
+]
+output = ["results/mapped/bwa/SRR702070.bam"]
+shell = """
+(bwa mem -t 8 -R '@RG\\tID:SRR702070\\tSM:SRR702070\\tPL:ILLUMINA' \
+  resources/genome.dna.homo_sapiens.GRCh38.111 {input[0]} {input[1]} \
+  | samtools view -b) > {output} 2> {log}
+"""
+log = "logs/bwa_mem/SRR702070.log"
+
+[rules.resources]
+threads = 8
+
+[rules.environment]
+conda = "envs/bwa.yaml"

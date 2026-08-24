@@ -1,0 +1,230 @@
+# Fusion candidate calling with STAR + Arriba (upstream workflow/rules/fusion_calling.smk,
+# the star_arriba meta wrapper v8.0.0).
+#
+# Rule map (upstream rule -> this module):
+#   star_index               -> fusion::star_index                (STAR 2.7.11b genomeGenerate wrapper)
+#   star_align               -> fusion::star_align                (STAR 2.7.11b align wrapper)
+#   arriba                   -> fusion::arriba                    (arriba v7.3.0 wrapper)
+#   annotate_exons           -> fusion::annotate_exons            (annotate_exon_numbers.sh)
+#   convert_fusions          -> fusion::convert_fusions           (convert_fusions_to_vcf.sh)
+#   sort_arriba_calls        -> fusion::sort_arriba_calls         (bcftools sort v1.21.0 wrapper)
+#   bcftools_concat_candidates -> fusion::bcftools_concat_candidates (bcftools concat v1.21.0 wrapper)
+#   bcf_index                -> fusion::bcf_index_arriba          (utils.smk instance)
+#
+# Deviations (details in README.md):
+#   * The sample wildcard freezes to SRR702070; the group wildcard of
+#     bcftools_concat_candidates freezes to SRR702070_group (the port's only
+#     group). get_arriba_group_candidates therefore resolves to the single
+#     sample's sorted BCF.
+#   * The upstream `use rule star_align with` override freezes to the port's
+#     merged reads (results/merged/SRR702070_R{1,2}.fastq.gz) and the read
+#     group "--outSAMattrRGline ID:SRR702070 SM:SRR702070 PL:ILLUMINA"
+#     (platform from config/samples.tsv); the fusion-tuned extra of
+#     fusion_calling.smk is used verbatim (--outSAMtype BAM
+#     SortedByCoordinate ... --chimSegmentReadGapMax 3).
+#   * arriba freezes genome_build=GRCh38, default_blacklist=True,
+#     default_known_fusions=True and the workflow's extra "-u -f ...".
+#     The wrapper's version probe and $CONDA_PREFIX/var/lib/arriba database
+#     paths are kept verbatim.
+#   * star_index outputs a directory upstream; the port writes a marker file
+#     (resources/star_genome/.genome_complete) after a successful run, and
+#     star_align consumes the marker (port convention, cf. ref::get_vep_cache).
+#   * The tempfile() tmpdirs of the STAR wrappers are represented with
+#     mktemp -d + cleanup; STAR's Log.out etc. land in the tmpdir and are
+#     discarded exactly as upstream.
+#   * The port has no envs/star.yaml — star_index and star_align run in the
+#     base environment and require STAR to be available (see report).
+#   * The candidate-calls BCF is the endpoint of the fusion branch: upstream
+#     the arriba candidates continue into the varlociraptor calling flow
+#     (calling.smk get_candidate_calls), which the port does not re-wire for
+#     arriba (the default candidate path is delly/freebayes only).
+
+[workflow]
+name = "fusion"
+
+# ---- upstream rule: star_index (meta wrapper v8.0.0) ------------------------
+# STAR 2.7.11b genomeGenerate; directory output -> marker file.
+[[rules]]
+name = "star_index"
+description = "Generate the STAR genome index (STAR 2.7.11b genomeGenerate wrapper)"
+when = "config.fusion_activate"
+input = [
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/annotation.gtf",
+]
+output = ["resources/star_genome/.genome_complete"]
+shell = """
+mkdir -p resources/star_genome && \
+tmpdir=$(mktemp -d) && \
+(STAR --runThreadN 4 --runMode genomeGenerate \
+  --genomeFastaFiles resources/genome.dna.homo_sapiens.GRCh38.111.fasta \
+  --sjdbOverhang 100 \
+  --sjdbGTFfile resources/annotation.gtf \
+  --genomeSAindexNbases 2 \
+  --outTmpDir "$tmpdir/STARtmp" \
+  --genomeDir resources/star_genome) 2> {log} && \
+rm -rf "$tmpdir" && \
+touch resources/star_genome/.genome_complete
+"""
+log = "logs/star_index_genome.log"
+
+[rules.resources]
+threads = 4
+
+[rules.environment]
+conda = "envs/star.yaml"
+
+# ---- upstream rule: star_align (fusion_calling.smk override) ----------------
+# STAR 2.7.11b align wrapper with the fusion-tuned extra; the sorted BAM goes
+# to stdout, ReadsPerGene is copied out of the tmpdir.
+[[rules]]
+name = "star_align"
+description = "Align reads with STAR for fusion detection (STAR 2.7.11b align wrapper)"
+when = "config.fusion_activate"
+input = [
+    "results/merged/SRR702070_R1.fastq.gz",
+    "results/merged/SRR702070_R2.fastq.gz",
+    "resources/star_genome/.genome_complete",
+    "resources/annotation.gtf",
+]
+output = [
+    "results/mapped/star/SRR702070.bam",
+    "results/mapped/star/SRR702070.ReadsPerGene.tsv",
+]
+shell = """
+tmpdir=$(mktemp -d) && \
+(STAR --runThreadN 12 \
+  --genomeDir resources/star_genome \
+  --readFilesIn results/merged/SRR702070_R1.fastq.gz results/merged/SRR702070_R2.fastq.gz \
+  --readFilesCommand gunzip -c \
+  --quantMode GeneCounts --sjdbGTFfile resources/annotation.gtf \
+  --outSAMattrRGline ID:SRR702070 SM:SRR702070 PL:ILLUMINA \
+  --outSAMtype BAM SortedByCoordinate --chimSegmentMin 10 --chimOutType WithinBAM SoftClip \
+  --chimJunctionOverhangMin 10 --chimScoreMin 1 --chimScoreDropMax 30 --chimScoreJunctionNonGTAG 0 \
+  --chimScoreSeparation 1 --alignSJstitchMismatchNmax 5 -1 5 5 --chimSegmentReadGapMax 3 \
+  --outTmpDir "$tmpdir/STARtmp" --outFileNamePrefix "$tmpdir/" \
+  --outStd BAM_SortedByCoordinate > {output[0]}) 2> {log} && \
+cat "$tmpdir/ReadsPerGene.out.tab" > {output[1]} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/star/SRR702070.log"
+
+[rules.resources]
+threads = 12
+
+[rules.environment]
+conda = "envs/star.yaml"
+
+# ---- upstream rule: arriba ---------------------------------------------------
+# arriba v7.3.0 wrapper with genome_build=GRCh38, default blacklist and
+# known_fusions, and the workflow's extra.
+[[rules]]
+name = "arriba"
+description = "Call fusion candidates with Arriba (arriba v7.3.0 wrapper)"
+when = "config.fusion_activate"
+input = [
+    "results/mapped/star/SRR702070.bam",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/annotation.gtf",
+]
+output = [
+    "results/arriba/SRR702070.fusions.tsv",
+    "results/arriba/SRR702070.fusions.discarded.tsv",
+]
+shell = """
+arriba_vers=$(arriba -h | grep -e 'Arriba ' -e '^Version: ' | grep -om1 '[0-9.]\\+$') && \
+arriba -x results/mapped/star/SRR702070.bam \
+  -a resources/genome.dna.homo_sapiens.GRCh38.111.fasta \
+  -g resources/annotation.gtf \
+  -b $CONDA_PREFIX/var/lib/arriba/blacklist_hg38_GRCh38_v${arriba_vers}.tsv.gz \
+  -k $CONDA_PREFIX/var/lib/arriba/known_fusions_hg38_GRCh38_v${arriba_vers}.tsv.gz \
+  -o results/arriba/SRR702070.fusions.tsv \
+  -O results/arriba/SRR702070.fusions.discarded.tsv \
+  -u -f no_genomic_support,genomic_support,no_coverage,mismatches,homopolymer,low_entropy,duplicates,min_support \
+  2> {log}
+"""
+log = "logs/arriba/SRR702070.log"
+
+[rules.environment]
+conda = "envs/arriba.yaml"
+
+# ---- upstream rule: annotate_exons ------------------------------------------
+[[rules]]
+name = "annotate_exons"
+description = "Annotate exon numbers in the fusion table (annotate_exon_numbers.sh)"
+when = "config.fusion_activate"
+input = [
+    "results/arriba/SRR702070.fusions.tsv",
+    "resources/annotation.gtf",
+]
+output = ["results/arriba/SRR702070.fusions.annotated.tsv"]
+shell = "annotate_exon_numbers.sh {input[0]} {input[1]} {output} 2> {log}"
+log = "logs/annotate_fusions/SRR702070.log"
+
+[rules.environment]
+conda = "envs/arriba.yaml"
+
+# ---- upstream rule: convert_fusions -----------------------------------------
+[[rules]]
+name = "convert_fusions"
+description = "Convert the annotated fusion table to a VCF (convert_fusions_to_vcf.sh)"
+when = "config.fusion_activate"
+input = [
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+    "results/arriba/SRR702070.fusions.annotated.tsv",
+]
+output = ["results/candidate-calls/arriba/SRR702070/SRR702070.vcf"]
+shell = "convert_fusions_to_vcf.sh {input[0]} {input[2]} {output} 2> {log}"
+log = "logs/convert_fusions/SRR702070.log"
+
+[rules.environment]
+conda = "envs/arriba.yaml"
+
+# ---- upstream rule: sort_arriba_calls ---------------------------------------
+# bcftools sort v1.21.0 wrapper (mem_mb 8000 -> -m 8000M).
+[[rules]]
+name = "sort_arriba_calls"
+description = "Sort the fusion candidate VCF (bcftools sort v1.21.0 wrapper)"
+when = "config.fusion_activate"
+input = ["results/candidate-calls/arriba/SRR702070/SRR702070.vcf"]
+output = ["results/candidate-calls/arriba/SRR702070/SRR702070.bcf"]
+shell = """
+tmpdir=$(mktemp -d) && \
+bcftools sort -m 8000M --output {output} --output-type b --temp-dir "$tmpdir" {input} 2> {log} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/bcf-sort/SRR702070/SRR702070.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: bcf_index (sorted arriba calls) -------------------------
+[[rules]]
+name = "bcf_index_arriba"
+description = "Index the sorted fusion candidates (bcftools index)"
+when = "config.fusion_activate"
+input = ["results/candidate-calls/arriba/SRR702070/SRR702070.bcf"]
+output = ["results/candidate-calls/arriba/SRR702070/SRR702070.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/candidate-calls/arriba/SRR702070/SRR702070.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: bcftools_concat_candidates ------------------------------
+# bcftools concat v1.21.0 wrapper with extra "-d exact -a".
+[[rules]]
+name = "bcftools_concat_candidates"
+description = "Gather the group's fusion candidates (bcftools concat v1.21.0 wrapper, -d exact -a)"
+when = "config.fusion_activate"
+input = [
+    "results/candidate-calls/arriba/SRR702070/SRR702070.bcf",
+    "results/candidate-calls/arriba/SRR702070/SRR702070.bcf.csi",
+]
+output = ["results/candidate-calls/arriba/SRR702070_group/SRR702070_group.bcf"]
+shell = "bcftools concat --output {output} --output-type b -d exact -a {input[0]} 2> {log}"
+log = "logs/concat_candidates/SRR702070_group.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"

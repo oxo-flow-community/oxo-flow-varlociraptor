@@ -1,0 +1,295 @@
+# Mutational burden estimation and mutational signature analysis
+# (upstream workflow/rules/mutational_burden.smk and mutational_signatures.smk,
+# plus ref.smk determine_coding_regions and utils.smk bcf_index instances).
+#
+# Rule map (upstream rule -> this module):
+#   determine_coding_regions        -> burden_signatures::determine_coding_regions (ref.smk, awk)
+#   bcf_index                       -> burden_signatures::bcf_index_final           (bcftools index)
+#   calculate_covered_coding_sites  -> burden_signatures::calculate_covered_coding_sites (bedtools intersect + awk)
+#   estimate_mutational_burden      -> burden_signatures::estimate_mutational_burden_{curve,hist}
+#   create_mutational_context_file  -> burden_signatures::create_mutational_context_file
+#                                      (scripts/create_mutational_context.py)
+#   download_cosmic_signatures      -> burden_signatures::download_cosmic_signatures (curl)
+#   annotate_mutational_signatures  -> burden_signatures::annotate_mutational_signatures
+#                                      (scripts/annotate_mutational_signatures.R)
+#   join_mutational_signatures      -> burden_signatures::join_mutational_signatures (cat)
+#   annotate_descriptions           -> burden_signatures::annotate_descriptions
+#                                      (scripts/annotate_descriptions.py)
+#   plot_mutational_signatures      -> burden_signatures::plot_mutational_signatures
+#                                      (scripts/plot_mutational_signatures.py)
+#
+# Deviations (details in README.md):
+#   * determine_coding_regions lives upstream in ref.smk but is only consumed
+#     by this module's calculate_covered_coding_sites, so it is gated here on
+#     `config.mutational_burden_activate || config.mutational_signatures_activate`.
+#   * The mutational_signatures wildcards are frozen: group=SRR702070_group,
+#     event=some_id (the port's only event), sample_alias=tumor (upstream
+#     default mutational_signatures/samples). mutational_signature_vaf_thresholds
+#     = range(5, 101, 5) freezes to the 20 thresholds 5..100 step 5.
+#   * estimate_mutational_burden freezes alias=tumor (the only sample) and
+#     mode to curve/hist (one rule per mode). events (a list upstream) freeze
+#     to the comma-joined config key and are split in the shell. The input
+#     results/final-calls/SRR702070_group/SRR702070_group.variants.annotated.bcf
+#     is produced by population::gather_annotated_calls (gated on
+#     mutational_burden_activate as well).
+#   * bcf_index_final indexes the port's final FDR-controlled callset; it is
+#     required by create_mutational_context_file (idx input).
+#   * join_mutational_signatures writes with > instead of the upstream >>:
+#     upstream the output is temp() so it never pre-exists when the rule runs;
+#     oxo-flow has no pre-run output cleanup, so >> would append stale rows
+#     on reruns. Upstream command is otherwise verbatim.
+#   * The 4 scripts are adapted from the snakemake script API to argv
+#     (see the script docstrings): python/R invocation with positional
+#     inputs + --output/--log style flags.
+
+[workflow]
+name = "burden_signatures"
+
+# ---- upstream rule: determine_coding_regions (ref.smk) ----------------------
+[[rules]]
+name = "determine_coding_regions"
+description = "Extract protein-coding exons as a BED (awk + grep + gzip)"
+when = "config.mutational_burden_activate || config.mutational_signatures_activate"
+input = ["resources/annotation.gtf"]
+output = ["resources/coding_regions.bed.gz"]
+shell = """
+(
+    cat {input} | \\
+    awk 'BEGIN { IFS = "\\t"} { if ($3 == "exon") { print $0 } }' | \\
+    grep 'transcript_biotype "protein_coding"' | \\
+    grep 'gene_biotype "protein_coding"' | \\
+    awk 'BEGIN { IFS = "\\t"; OFS = "\\t"}  { print $1,$4-1,$5 }' | \\
+    gzip >{output} \\
+) 2>{log}
+"""
+log = "logs/determine_coding_regions.log"
+
+[rules.environment]
+conda = "envs/awk.yaml"
+
+# ---- upstream rule: bcf_index (final FDR-controlled calls) ------------------
+[[rules]]
+name = "bcf_index_final"
+description = "Index the final FDR-controlled calls (bcftools index)"
+when = "config.mutational_signatures_activate"
+input = ["results/final-calls/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.bcf"]
+output = ["results/final-calls/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/final-calls/SRR702070_group.some_id.variants.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: calculate_covered_coding_sites --------------------------
+[[rules]]
+name = "calculate_covered_coding_sites"
+description = "Count covered coding sites (bedtools intersect | awk)"
+when = "config.mutational_burden_activate"
+input = [
+    "results/regions/SRR702070_group.covered_regions.filtered.bed",
+    "resources/coding_regions.bed.gz",
+]
+output = ["results/regions/SRR702070_group.covered_regions.filtered.coding.coverage_breadth.txt"]
+shell = """
+( bedtools intersect -a {input[0]} -b {input[1]} | \
+  awk '{{ covered += $3 - $2 }} END {{ print covered }}' >{output} \
+) 2> {log}
+"""
+log = "logs/regions/SRR702070_group.covered_regions.filtered.coding.coverage_breadth.log"
+
+[rules.environment]
+conda = "envs/awk_bedtools.yaml"
+
+# ---- upstream rule: estimate_mutational_burden (mode = curve) ---------------
+[[rules]]
+name = "estimate_mutational_burden_curve"
+description = "Estimate the mutational burden curve (varlociraptor estimate mutational-burden | vl2svg)"
+when = "config.mutational_burden_activate"
+input = [
+    "results/final-calls/SRR702070_group/SRR702070_group.variants.annotated.bcf",
+    "results/regions/SRR702070_group.covered_regions.filtered.coding.coverage_breadth.txt",
+]
+output = ["results/plots/mutational-burden/SRR702070_group.tumor.curve.mutational-burden.svg"]
+shell = """
+( varlociraptor estimate mutational-burden \
+  --mode curve \
+  --coding-genome-size $( cat {input[1]} ) \
+  --events $(echo {config.mutational_burden_events} | tr ',' ' ') \
+  --sample tumor \
+  < {input[0]} | vl2svg > {output} ) 2> {log}
+"""
+log = "logs/estimate-mutational-burden/SRR702070_group.tumor.curve.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+# ---- upstream rule: estimate_mutational_burden (mode = hist) ----------------
+[[rules]]
+name = "estimate_mutational_burden_hist"
+description = "Estimate the mutational burden histogram (varlociraptor estimate mutational-burden | vl2svg)"
+when = "config.mutational_burden_activate"
+input = [
+    "results/final-calls/SRR702070_group/SRR702070_group.variants.annotated.bcf",
+    "results/regions/SRR702070_group.covered_regions.filtered.coding.coverage_breadth.txt",
+]
+output = ["results/plots/mutational-burden/SRR702070_group.tumor.hist.mutational-burden.svg"]
+shell = """
+( varlociraptor estimate mutational-burden \
+  --mode hist \
+  --coding-genome-size $( cat {input[1]} ) \
+  --events $(echo {config.mutational_burden_events} | tr ',' ' ') \
+  --sample tumor \
+  < {input[0]} | vl2svg > {output} ) 2> {log}
+"""
+log = "logs/estimate-mutational-burden/SRR702070_group.tumor.hist.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+# ---- upstream rule: create_mutational_context_file --------------------------
+[[rules]]
+name = "create_mutational_context_file"
+description = "Create the trinucleotide context and mutation counts tables (scripts/create_mutational_context.py)"
+when = "config.mutational_signatures_activate"
+input = [
+    "results/final-calls/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.bcf",
+    "results/final-calls/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.bcf.csi",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+]
+output = [
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.context.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.counts.tsv",
+]
+shell = """
+python scripts/create_mutational_context.py {input[0]} {input[2]} \
+  --sample-alias tumor --group SRR702070_group \
+  --vafs 5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100 \
+  --output-context {output[0]} --output-counts {output[1]} --log {log}
+"""
+log = "logs/mutational_signatures/context/SRR702070_group.some_id.tumor.log"
+
+[rules.environment]
+conda = "envs/pystats.yaml"
+
+# ---- upstream rule: download_cosmic_signatures ------------------------------
+[[rules]]
+name = "download_cosmic_signatures"
+description = "Download the COSMIC v3.4 SBS signatures (curl)"
+when = "config.mutational_signatures_activate"
+output = ["resources/cosmic_signatures.txt"]
+shell = "curl https://cog.sanger.ac.uk/cosmic-signatures-production/documents/COSMIC_v3.4_SBS_GRCh38.txt -o {output} &> {log}"
+log = "logs/mutational_signatures/download_cosmic.log"
+
+[rules.environment]
+conda = "envs/curl.yaml"
+
+# ---- upstream rule: annotate_mutational_signatures --------------------------
+# One output per VAF threshold (20 outputs, range(5, 101, 5)).
+[[rules]]
+name = "annotate_mutational_signatures"
+description = "Fit COSMIC signature exposures per VAF threshold (scripts/annotate_mutational_signatures.R)"
+when = "config.mutational_signatures_activate"
+input = [
+    "resources/cosmic_signatures.txt",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.context.tsv",
+]
+output = [
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.5.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.10.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.15.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.20.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.25.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.30.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.35.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.40.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.45.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.50.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.55.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.60.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.65.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.70.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.75.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.80.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.85.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.90.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.95.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.100.tsv",
+]
+shell = """
+Rscript scripts/annotate_mutational_signatures.R {input[0]} {input[1]} \
+  --group SRR702070_group \
+  --vafs 5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100 \
+  --outputs {output[0]},{output[1]},{output[2]},{output[3]},{output[4]},{output[5]},{output[6]},{output[7]},{output[8]},{output[9]},{output[10]},{output[11]},{output[12]},{output[13]},{output[14]},{output[15]},{output[16]},{output[17]},{output[18]},{output[19]} \
+  --log {log}
+"""
+log = "logs/mutational_signatures/annotate/SRR702070_group.some_id.tumor.log"
+
+[rules.environment]
+conda = "envs/siglasso.yaml"
+
+# ---- upstream rule: join_mutational_signatures ------------------------------
+# `>` instead of the upstream `>>` (see header).
+[[rules]]
+name = "join_mutational_signatures"
+description = "Concatenate the per-threshold signature tables with a header (cat)"
+when = "config.mutational_signatures_activate"
+input = [
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.5.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.10.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.15.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.20.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.25.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.30.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.35.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.40.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.45.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.50.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.55.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.60.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.65.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.70.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.75.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.80.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.85.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.90.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.95.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.100.tsv",
+]
+output = ["results/mutational_signatures/SRR702070_group.some_id.tumor.tsv"]
+shell = """
+cat <(echo "Signature\tFrequency\tMinimum VAF") {input[0]} {input[1]} {input[2]} {input[3]} {input[4]} {input[5]} {input[6]} {input[7]} {input[8]} {input[9]} {input[10]} {input[11]} {input[12]} {input[13]} {input[14]} {input[15]} {input[16]} {input[17]} {input[18]} {input[19]} > {output} 2> {log}
+"""
+log = "logs/mutational_signatures/join/SRR702070_group.some_id.tumor.log"
+
+# ---- upstream rule: annotate_descriptions -----------------------------------
+[[rules]]
+name = "annotate_descriptions"
+description = "Merge signature descriptions into the joined table (scripts/annotate_descriptions.py)"
+when = "config.mutational_signatures_activate"
+input = [
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.tsv",
+    "resources/cosmic_signature_desc_v3.4.tsv",
+]
+output = ["results/mutational_signatures/SRR702070_group.some_id.tumor.annotated.tsv"]
+shell = "python scripts/annotate_descriptions.py {input[0]} {input[1]} --output {output} --log {log}"
+log = "logs/mutational_signatures/annotate/SRR702070_group.some_id.tumor.log"
+
+[rules.environment]
+conda = "envs/pystats.yaml"
+
+# ---- upstream rule: plot_mutational_signatures ------------------------------
+[[rules]]
+name = "plot_mutational_signatures"
+description = "Plot signature exposures and mutation counts (scripts/plot_mutational_signatures.py)"
+when = "config.mutational_signatures_activate"
+input = [
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.annotated.tsv",
+    "results/mutational_signatures/SRR702070_group.some_id.tumor.counts.tsv",
+]
+output = ["results/plots/mutational_signatures/SRR702070_group.some_id.tumor.html"]
+shell = "python scripts/plot_mutational_signatures.py {input[0]} {input[1]} --output {output} --log {log}"
+log = "logs/mutational_signatures/SRR702070_group.some_id.tumor.log"
+
+[rules.environment]
+conda = "envs/pystats.yaml"

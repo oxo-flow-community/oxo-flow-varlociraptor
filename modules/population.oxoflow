@@ -1,0 +1,160 @@
+# Population-database filtering and update (upstream workflow/rules/population.smk,
+# plus annotation.smk gather_annotated_calls and utils.smk bcf_index instances).
+#
+# Rule map (upstream rule -> this module):
+#   clean_population_db        -> population::clean_population_db        (bcftools view)
+#   gather_annotated_calls     -> population::gather_annotated_calls     (bcftools concat v2.3.2 wrapper)
+#   bcf_index                  -> population::annotated_index / bcf_index_cleaned_db /
+#                                 bcf_index_population_filtered          (bcftools index)
+#   population_filter_variants -> population::population_filter_variants (varlociraptor filter-calls)
+#   population_db_update       -> population::population_db_update       (bcftools merge)
+#
+# Deviations (details in README.md):
+#   * gather_annotated_calls lives upstream in annotation.smk but is only
+#     consumed by this module and burden_signatures::estimate_mutational_burden,
+#     so it is gated here on
+#     `config.population_db_activate || config.mutational_burden_activate`.
+#     The upstream wildcards are frozen: group=SRR702070_group,
+#     calling_type=variants (the port has no fusions calling),
+#     scatteritem=0. get_gather_annotated_calls_input resolves to the
+#     db_annotated callset (annotations/vcfs is active in the default config),
+#     which is the port's results/calls/db_annotated/...variants.0.bcf; the
+#     output is results/final-calls/{group}/{group}.variants.annotated.bcf.
+#     NOTE: this is the file the task brief refers to as
+#     results/final-calls/{group}.variants.annotated.bcf — the port keeps the
+#     upstream path shape (with the group subdirectory).
+#   * clean_population_db reads "{config.population_db_path}" from disk
+#     WITHOUT declaring it as an input. Upstream flags this input with
+#     snakemake before_update (the file may not exist yet and is only "used as
+#     is" before the update rule rewrites it) and population_db_update flags
+#     its output with update(); the two flags break the inherent
+#     input/output cycle between these rules. oxo-flow has no such flags, and
+#     validate rejects the cycle, so the port models the before_update
+#     semantics directly: no input edge, the shell uses the configured path.
+#     The first-run-empty semantics (upstream: clean_population_db has no
+#     input while the db file is absent) collapse into "the file must exist
+#     when the rule runs" (documented).
+#   * population_db_update declares "{config.population_db_path}" as its
+#     output (upstream flags it with update()); the update flag semantics
+#     (the file may be overwritten by this rule) need no port equivalent.
+#   * remove_groups (upstream: all variant groups joined by ",") freezes to
+#     "SRR702070_group"; events (population/db/events, a list upstream) freeze
+#     to the comma-joined config key and are split in the shell; fdr/alias
+#     come from config keys with upstream defaults 0.05 / "tumor".
+#   * get_population_bcfs freezes to the port's single group:
+#     results/population/SRR702070_group.variants.filtered.bcf(+.csi).
+
+[workflow]
+name = "population"
+
+# ---- upstream rule: clean_population_db -------------------------------------
+# The database path is read as-is (upstream before_update flag, no DAG edge).
+[[rules]]
+name = "clean_population_db"
+description = "Remove the variant group's samples from the population database (bcftools view --samples ^)"
+when = "config.population_db_activate"
+output = ["results/population_db.cleaned.bcf"]
+shell = "bcftools view --force-samples --samples ^SRR702070_group {config.population_db_path} -Ob > {output} 2> {log}"
+log = "logs/population/clean_population_db.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: gather_annotated_calls (annotation.smk) -----------------
+# bcftools concat v2.3.2 wrapper (-a) over the db_annotated callset; feeds
+# population_filter_variants and burden_signatures::estimate_mutational_burden.
+[[rules]]
+name = "gather_annotated_calls"
+description = "Gather the annotated calls (bcftools concat v2.3.2 wrapper, -a)"
+when = "config.population_db_activate || config.mutational_burden_activate"
+input = [
+    "results/calls/db_annotated/SRR702070_group/SRR702070_group.variants.0.bcf",
+    "results/calls/db_annotated/SRR702070_group/SRR702070_group.variants.0.bcf.csi",
+]
+output = ["results/final-calls/SRR702070_group/SRR702070_group.variants.annotated.bcf"]
+shell = "bcftools concat --output {output} --output-type b -a {input[0]} 2> {log}"
+log = "logs/gather-annotated-calls/SRR702070_group/SRR702070_group.variants.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: bcf_index (db_annotated calls) --------------------------
+# Also fixes the pre-existing default-path warning about the missing
+# db_annotated csi when the population/burden branch is active.
+[[rules]]
+name = "annotated_index"
+description = "Index the db_annotated calls (bcftools index)"
+when = "config.population_db_activate || config.mutational_burden_activate"
+input = ["results/calls/db_annotated/SRR702070_group/SRR702070_group.variants.0.bcf"]
+output = ["results/calls/db_annotated/SRR702070_group/SRR702070_group.variants.0.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/db_annotated/SRR702070_group/SRR702070_group.variants.0.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: bcf_index (cleaned population db) -----------------------
+[[rules]]
+name = "bcf_index_cleaned_db"
+description = "Index the cleaned population database (bcftools index)"
+when = "config.population_db_activate"
+input = ["results/population_db.cleaned.bcf"]
+output = ["results/population_db.cleaned.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/population_db.cleaned.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: population_filter_variants ------------------------------
+[[rules]]
+name = "population_filter_variants"
+description = "FDR-control the annotated calls against the population database (varlociraptor filter-calls)"
+when = "config.population_db_activate"
+input = ["results/final-calls/SRR702070_group/SRR702070_group.variants.annotated.bcf"]
+output = ["results/population/SRR702070_group.variants.filtered.bcf"]
+shell = """
+varlociraptor filter-calls control-fdr --mode local-smart {input} \
+  --events $(echo {config.population_db_events} | tr ',' ' ') \
+  --fdr {config.population_db_fdr} | \
+  bcftools view --samples {config.population_db_alias} | \
+  bcftools annotate --remove ^INFO/SVLEN,INFO/SVTYPE,INFO/MATEID,INFO/END,INFO/CIPOS,INFO/CIEND,^FORMAT/AF | \
+  bcftools reheader -s <(echo 'SRR702070_group') | \
+  bcftools view -Ou > {output} 2> {log}
+"""
+log = "logs/population/SRR702070_group.filter.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+# ---- upstream rule: bcf_index (population-filtered calls) -------------------
+[[rules]]
+name = "bcf_index_population_filtered"
+description = "Index the population-filtered calls (bcftools index)"
+when = "config.population_db_activate"
+input = ["results/population/SRR702070_group.variants.filtered.bcf"]
+output = ["results/population/SRR702070_group.variants.filtered.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/population/SRR702070_group.variants.filtered.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: population_db_update ------------------------------------
+# bcftools merge -m none over cleaned db + population-filtered calls.
+[[rules]]
+name = "population_db_update"
+description = "Merge population-filtered calls into the population database (bcftools merge -m none)"
+when = "config.population_db_activate"
+input = [
+    "results/population_db.cleaned.bcf",
+    "results/population_db.cleaned.bcf.csi",
+    "results/population/SRR702070_group.variants.filtered.bcf",
+    "results/population/SRR702070_group.variants.filtered.bcf.csi",
+]
+output = ["{config.population_db_path}"]
+shell = "bcftools merge -m none {input[0]} {input[2]} -Ob > {output} 2> {log}"
+log = "logs/population/db_export/update_population_db.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"

@@ -1,0 +1,43 @@
+# VEP plugin score downloads (upstream workflow/rules/plugins.smk).
+#
+# Rule map (upstream rule -> this module):
+#   download_cadd_scores_for_vep -> plugins::download_cadd_scores_for_vep
+#   download_revel                -> ref::download_revel           (already ported in ref.oxoflow)
+#   process_revel_scores          -> ref::process_revel_scores     (already ported in ref.oxoflow)
+#
+# Deviations (details in README.md):
+#   * The wildcards build / cadd_version / variant_type are frozen to their
+#     upstream defaults (GRCh38 / v1.7 / snv), exposed as config keys
+#     (cadd_build, cadd_version, cadd_variant_type) whose defaults match.
+#     get_file_name resolves to "whole_genome_SNVs" for variant_type=snv
+#     (the indel name "gnomad.genomes.r4.0.indel" is only reachable by
+#     changing the config key; the URL uses the frozen snv name).
+#   * download_revel + process_revel_scores are upstream rules of this file
+#     but were already ported as ref::download_revel / ref::process_revel_scores
+#     (they are gated on the ref downloads); the two VEP plugins feed the
+#     same annotation flow here.
+#   * cache "omit-software" (upstream) has no port equivalent.
+
+[workflow]
+name = "plugins"
+
+# ---- upstream rule: download_cadd_scores_for_vep ----------------------------
+[[rules]]
+name = "download_cadd_scores_for_vep"
+description = "Download and preprocess CADD scores for VEP (wget | gzip -d | cut | bgzip)"
+when = "config.plugins_activate"
+output = ["resources/cadd/{config.cadd_build}/{config.cadd_version}/{config.cadd_variant_type}.tsv.gz"]
+shell = """
+( wget --retry-connrefused --waitretry=10 --tries=10 --continue \
+    "https://kircherlab.bihealth.org/download/CADD/{config.cadd_version}/{config.cadd_build}/whole_genome_SNVs.tsv.gz" \
+    -O - | \
+  gzip -d | \
+  cut -f1-4,6 | \
+  bgzip -l1 -c \
+  > {output} \
+) 2> {log}
+"""
+log = "logs/cadd/{config.cadd_build}/{config.cadd_version}/{config.cadd_variant_type}.log"
+
+[rules.environment]
+conda = "envs/download_cadd.yaml"

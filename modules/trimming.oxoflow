@@ -1,0 +1,124 @@
+# Read trimming / SRA download (upstream workflow/rules/trimming.smk).
+#
+# Rule map (upstream rule -> this module):
+#   get_sra           -> trimming::get_sra
+#                        (sra-tools fasterq-dump v7.6.0 wrapper)
+#   fastp_pipe        -> trimming::fastp_pipe
+#   fastp_se          -> trimming::fastp_se          (fastp v6.2.0 wrapper)
+#   fastp_pe          -> trimming::fastp_pe          (fastp v6.2.0 wrapper)
+#   merge_trimmed_fastqs -> mapping::merge_trimmed_fastqs_{r1,r2}
+#                        (already ported in modules/mapping.oxoflow as a raw
+#                        passthrough, since the default path has no trimming)
+#
+# Deviations (details in README.md):
+#   * get_sra is frozen to the port's sample (accession SRR702070, the SRA
+#     accession the fixtures were derived from); the upstream rule only runs
+#     for units with an `sra` column entry.
+#   * fastp_pipe uses a named pipe upstream (pipe()); the port represents it
+#     as a regular file. Upstream wildcards (fq in fq1|fq2, ext in
+#     fastq|fastq.gz) are frozen to the fq1/fastq.gz instance; the port's
+#     unit has a single read file per pair, so the multi-file concatenation
+#     case is not exercised.
+#   * fastp_se is ported although the port's sample is paired-end (upstream
+#     runs it only for single-end units) — kept for rule coverage.
+#   * Environment: upstream get_sra and the fastp rules have no `conda:`
+#     directive (the wrapper environments sra-tools + pigz / fastp are used
+#     implicitly via the wrapper hub). The port pins the same wrapper
+#     environments explicitly: envs/sra_tools.yaml (sra-tools 3.2.1 + pigz
+#     2.8, from the v7.6.0 wrapper) and envs/fastp.yaml (fastp 0.24.1, from
+#     the v6.2.0 wrapper).
+#   * fastp adapters/extra are empty (upstream: autotrimming default,
+#     params.fastp ""). fastp's stdout+stderr go to the log as upstream.
+
+[workflow]
+name = "trimming"
+
+# ---- upstream rule: get_sra -------------------------------------------------
+# sra-tools fasterq-dump v7.6.0 wrapper (threads 1): fasterq-dump into sra/
+# and gzip the two mates with pigz.
+[[rules]]
+name = "get_sra"
+description = "Download and split the SRA run into FASTQ mates (fasterq-dump v7.6.0 wrapper)"
+when = "config.trimming_activate"
+output = [
+    "sra/SRR702070_1.fastq.gz",
+    "sra/SRR702070_2.fastq.gz",
+]
+shell = """
+tmpdir=$(mktemp -d) && \
+(fasterq-dump --temp "$tmpdir" --threads 1 --outdir sra SRR702070; \
+ pigz -p 1 sra/SRR702070_1.fastq; pigz -p 1 sra/SRR702070_2.fastq) 2> {log} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/get-sra/SRR702070.log"
+
+[rules.resources]
+threads = 1
+
+[rules.environment]
+conda = "envs/sra_tools.yaml"
+
+# ---- upstream rule: fastp_pipe ----------------------------------------------
+# Concatenate multi-file raw reads of a unit into a single stream. Frozen to
+# the fq1/fastq.gz instance (see header).
+[[rules]]
+name = "fastp_pipe"
+description = "Concatenate unit read files into a single FASTQ (cat)"
+when = "config.trimming_activate"
+input = ["{config.reads_dir}/SRR702070_1.fastq.gz"]
+output = ["pipe/fastp/SRR702070/lane1.fq1.fastq.gz"]
+shell = "cat {input} > {output} 2> {log}"
+log = "logs/pipe-fastqs/fastp/SRR702070-lane1.fq1.fastq.gz.log"
+
+# ---- upstream rule: fastp_se ------------------------------------------------
+# fastp v6.2.0 wrapper, single-end branch (--in1/--out1).
+[[rules]]
+name = "fastp_se"
+description = "Trim single-end reads with fastp (fastp v6.2.0 wrapper)"
+when = "config.trimming_activate"
+input = ["{config.reads_dir}/SRR702070_1.fastq.gz"]
+output = [
+    "results/trimmed/SRR702070/lane1.single.fastq.gz",
+    "results/trimmed/SRR702070/lane1.single.qc.html",
+    "results/trimmed/SRR702070/lane1.single.json",
+]
+shell = """
+(fastp --thread 8 --in1 {input[0]} --out1 {output[0]} \
+  --json {output[2]} --html {output[1]}) &> {log}
+"""
+log = "logs/fastp/se/SRR702070_lane1.log"
+
+[rules.resources]
+threads = 8
+
+[rules.environment]
+conda = "envs/fastp.yaml"
+
+# ---- upstream rule: fastp_pe ------------------------------------------------
+# fastp v6.2.0 wrapper, paired-end branch (--in1/--in2/--out1/--out2).
+[[rules]]
+name = "fastp_pe"
+description = "Trim paired-end reads with fastp (fastp v6.2.0 wrapper)"
+when = "config.trimming_activate"
+input = [
+    "{config.reads_dir}/SRR702070_1.fastq.gz",
+    "{config.reads_dir}/SRR702070_2.fastq.gz",
+]
+output = [
+    "results/trimmed/SRR702070/lane1_R1.fastq.gz",
+    "results/trimmed/SRR702070/lane1_R2.fastq.gz",
+    "results/trimmed/SRR702070/lane1.paired.qc.html",
+    "results/trimmed/SRR702070/lane1.paired.json",
+]
+shell = """
+(fastp --thread 8 --in1 {input[0]} --in2 {input[1]} \
+  --out1 {output[0]} --out2 {output[1]} \
+  --json {output[3]} --html {output[2]}) &> {log}
+"""
+log = "logs/fastp/pe/SRR702070_lane1.log"
+
+[rules.resources]
+threads = 8
+
+[rules.environment]
+conda = "envs/fastp.yaml"

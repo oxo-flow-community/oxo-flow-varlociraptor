@@ -1,0 +1,87 @@
+# Benchmarking against the CHM1/CHM13 reference sample (upstream
+# workflow/rules/benchmarking.smk).
+#
+# Rule map (upstream rule -> this module):
+#   gather_benchmark_calls -> benchmarking::gather_benchmark_calls (bcftools concat v2.3.2 wrapper)
+#   chromosome_map         -> benchmarking::chromosome_map         (awk)
+#   rename_chromosomes     -> benchmarking::rename_chromosomes     (bcftools annotate + view)
+#
+# Excluded upstream rules (reasons, details in README.md):
+#   * chm_eval_sample  — downloads the 13 GB CHM1 alignment (SRA ERR1341783);
+#     the port repo ships no CHM1 data and the rule's whole point is the
+#     third-party download.
+#   * chm_namesort, chm_to_fastq — transform the downloaded CHM1 alignment;
+#     excluded together with chm_eval_sample (they exist only to re-derive
+#     the FASTQs used by the calling branch for the chm group).
+#   * chm_eval_kit, chm_eval — depend on the third-party CHM-eval kit
+#     downloads (github.com/lh3/CHM-eval releases) and on the chm group
+#     final-calls, which the port does not produce.
+#   * ruleorder chm_eval_sample > map_reads_bwa — not ported (no ruleorder
+#     concept in oxo-flow).
+#
+# Deviations (details in README.md):
+#   * Wildcards frozen: group=chm, scatteritem=0, query=some_id (the port's
+#     only event). rename_chromosomes therefore consumes
+#     results/final-calls/chm/chm.some_id.fdr-controlled.bcf, which the port
+#     does not produce (no chm group in config/samples.tsv) — the rule is a
+#     faithful port with an orphan input; validate warns about the missing
+#     input, exactly like the upstream rule would be unbuildable without the
+#     excluded chm flow.
+#   * gather_benchmark_calls consumes results/calls/chm.0.bcf(+.csi), the
+#     upstream scatter chunks of the chm calling (not ported) — same orphan
+#     status.
+#   * targets of rename_chromosomes freeze to chr0..chr22,chrX,chrY
+#     (upstream: ",".join(chr0..chr22 + chrX + chrY) via range(23)).
+
+[workflow]
+name = "benchmarking"
+
+# ---- upstream rule: gather_benchmark_calls ----------------------------------
+# bcftools concat v2.3.2 wrapper (-a) over the chm calling scatter chunks.
+[[rules]]
+name = "gather_benchmark_calls"
+description = "Gather the benchmark calling chunks (bcftools concat v2.3.2 wrapper, -a)"
+when = "config.benchmarking_activate"
+input = [
+    "results/calls/chm.0.bcf",
+    "results/calls/chm.0.bcf.csi",
+]
+output = ["results/calls/chm.bcf"]
+shell = "bcftools concat --output {output} --output-type b -a {input[0]} 2> {log}"
+log = "logs/gather-benchmark-calls/chm.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: chromosome_map ------------------------------------------
+[[rules]]
+name = "chromosome_map"
+description = "Build the chromosome name map for the reference (awk)"
+when = "config.benchmarking_activate"
+input = ["resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai"]
+output = ["resources/genome.dna.homo_sapiens.GRCh38.111.chrmap.txt"]
+shell = """awk '{{ print $1,"chr"$1 }}' OFS='\t' {input} > {output} 2> {log}"""
+log = "logs/benchmarking/chromosome-map.log"
+
+[rules.environment]
+conda = "envs/awk.yaml"
+
+# ---- upstream rule: rename_chromosomes --------------------------------------
+# bcftools annotate --rename-chrs then keep autosomes 0-22 + X + Y.
+[[rules]]
+name = "rename_chromosomes"
+description = "Rename chr1 -> chr01-style names and keep autosomes + sex chromosomes (bcftools annotate + view)"
+when = "config.benchmarking_activate"
+input = [
+    "results/final-calls/chm/chm.some_id.fdr-controlled.bcf",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.chrmap.txt",
+]
+output = ["benchmarking/some_id.chr-mapped.vcf"]
+shell = """
+(bcftools annotate --rename-chrs {input[1]} {input[0]} | \
+ bcftools view --targets chr0,chr1,chr2,chr3,chr4,chr5,chr6,chr7,chr8,chr9,chr10,chr11,chr12,chr13,chr14,chr15,chr16,chr17,chr18,chr19,chr20,chr21,chr22,chrX,chrY > {output}) 2> {log}
+"""
+log = "logs/benchmarking/some_id.rename-chromosomes.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
