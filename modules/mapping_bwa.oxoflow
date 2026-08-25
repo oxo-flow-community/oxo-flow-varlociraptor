@@ -33,12 +33,16 @@ description = "Build the bwa index of the reference genome (bwa index v2.3.2 wra
 when = "config.bwa_align_activate || config.primers_activate"
 input = ["resources/genome.dna.homo_sapiens.GRCh38.111.fasta"]
 output = [
-    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.amb",
-    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.ann",
-    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.bwt",
-    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.pac",
-    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.sa",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.amb",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.ann",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.bwt",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.pac",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.sa",
 ]
+# -p writes <prefix>.<ext> — the prefix is the resource name WITHOUT the
+# .fasta extension (the wrapper strips the extension of idx[0] upstream);
+# the declared outputs above carry no .fasta (live: output validation
+# failed when they did).
 shell = "bwa index -p resources/genome.dna.homo_sapiens.GRCh38.111 {input} 2> {log}"
 log = "logs/bwa_index.log"
 
@@ -54,11 +58,11 @@ when = "config.bwa_align_activate"
 input = [
     "results/merged/SRR702070_R1.fastq.gz",
     "results/merged/SRR702070_R2.fastq.gz",
-    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.amb",
-    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.ann",
-    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.bwt",
-    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.pac",
-    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.sa",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.amb",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.ann",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.bwt",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.pac",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.sa",
 ]
 output = ["results/mapped/bwa/SRR702070.bam"]
 shell = """
