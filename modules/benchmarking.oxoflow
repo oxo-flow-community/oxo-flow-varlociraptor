@@ -3,33 +3,34 @@
 #
 # Rule map (upstream rule -> this module):
 #   gather_benchmark_calls -> benchmarking::gather_benchmark_calls (bcftools concat v2.3.2 wrapper)
-#   chromosome_map         -> benchmarking::chromosome_map         (awk)
-#   rename_chromosomes     -> benchmarking::rename_chromosomes     (bcftools annotate + view)
+#   chm_eval_sample        -> benchmarking::chm_eval_sample         (curl, SRA EBI)
+#   chm_namesort           -> benchmarking::chm_namesort            (samtools sort -n v9.15.0 wrapper)
+#   chm_to_fastq           -> benchmarking::chm_to_fastq            (samtools fastq)
+#   chm_eval_kit           -> benchmarking::chm_eval_kit            (curl + tar, CHM-eval releases)
+#   chromosome_map         -> benchmarking::chromosome_map          (awk)
+#   rename_chromosomes     -> benchmarking::rename_chromosomes      (bcftools annotate + view)
+#   chm_eval               -> benchmarking::chm_eval                (kit run-eval)
 #
-# Excluded upstream rules (reasons, details in README.md):
-#   * chm_eval_sample  — downloads the 13 GB CHM1 alignment (SRA ERR1341783);
-#     the port repo ships no CHM1 data and the rule's whole point is the
-#     third-party download.
-#   * chm_namesort, chm_to_fastq — transform the downloaded CHM1 alignment;
-#     excluded together with chm_eval_sample (they exist only to re-derive
-#     the FASTQs used by the calling branch for the chm group).
-#   * chm_eval_kit, chm_eval — depend on the third-party CHM-eval kit
-#     downloads (github.com/lh3/CHM-eval releases) and on the chm group
-#     final-calls, which the port does not produce.
+# Not ported (details in README.md):
+#   * The chm sample group vertical slice: chm_eval_sample/chm_to_fastq
+#     re-derive the CHM1 FASTQs, but the chm sample is not in the port's
+#     config/samples.tsv, so the chm reads do not flow through the port's
+#     mapping -> calling -> control_fdr chain. rename_chromosomes therefore
+#     consumes results/final-calls/chm/chm.some_id.fdr-controlled.bcf, which
+#     no rule produces (orphan input; validate warns, like upstream without
+#     the chm sample).
 #   * ruleorder chm_eval_sample > map_reads_bwa — not ported (no ruleorder
 #     concept in oxo-flow).
 #
 # Deviations (details in README.md):
 #   * Wildcards frozen: group=chm, scatteritem=0, query=some_id (the port's
-#     only event). rename_chromosomes therefore consumes
-#     results/final-calls/chm/chm.some_id.fdr-controlled.bcf, which the port
-#     does not produce (no chm group in config/samples.tsv) — the rule is a
-#     faithful port with an orphan input; validate warns about the missing
-#     input, exactly like the upstream rule would be unbuildable without the
-#     excluded chm flow.
-#   * gather_benchmark_calls consumes results/calls/chm.0.bcf(+.csi), the
-#     upstream scatter chunks of the chm calling (not ported) — same orphan
-#     status.
+#     only event). gather_benchmark_calls consumes results/calls/chm.0.bcf
+#     (+.csi), the collapsed scatter chunk of the chm calling (not ported) —
+#     same orphan status as rename_chromosomes.
+#   * chm_eval_kit declares a marker file
+#     resources/benchmarking/chm-eval-kit/.kit_complete instead of the
+#     upstream directory output (oxo-flow outputs are files); the kit files
+#     themselves land in resources/benchmarking/chm-eval-kit/ as upstream.
 #   * targets of rename_chromosomes freeze to chr0..chr22,chrX,chrY
 #     (upstream: ",".join(chr0..chr22 + chrX + chrY) via range(23)).
 
@@ -52,6 +53,84 @@ log = "logs/gather-benchmark-calls/chm.log"
 
 [rules.environment]
 conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: chm_eval_sample -----------------------------------------
+# CHM1/CHM13 hybrid alignment from SRA EBI (13 GB, ftp). The wrapper's
+# download+index commands, no conda upstream — the port pins the wrapper's
+# environment (samtools =1.24 + curl).
+[[rules]]
+name = "chm_eval_sample"
+description = "Download the CHM1/CHM13 hybrid alignment from EBI (13 GB) and index it (curl)"
+when = "config.benchmarking_activate"
+output = ["resources/chm.bam"]
+shell = """
+(curl -L ftp://ftp.sra.ebi.ac.uk/vol1/run/ERR134/ERR1341796/CHM1_CHM13_2.bam > {output}
+ samtools index {output}) 2> {log}
+"""
+log = "logs/benchmarking/chm-eval-sample.log"
+
+[rules.environment]
+conda = "envs/chm_eval_sample.yaml"
+
+# ---- upstream rule: chm_namesort --------------------------------------------
+# samtools sort v9.15.0 wrapper (-n, 16 threads, 64000 MiB -> -m 3600M).
+[[rules]]
+name = "chm_namesort"
+description = "Name-sort the CHM1 alignment (samtools sort v9.15.0 wrapper, -n)"
+when = "config.benchmarking_activate"
+input = ["resources/chm.bam"]
+output = ["resources/chm.namesorted.bam"]
+shell = """
+tmpdir=$(mktemp -d) && \
+samtools sort -n --threads 15 -o {output} --output-fmt BAM -m 3600M -T "$tmpdir/samtools_sort" {input} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/benchmarking/samtools-namesort.log"
+
+[rules.resources]
+threads = 16
+memory = "64G"
+
+[rules.environment]
+conda = "envs/samtools.yaml"
+
+# ---- upstream rule: chm_to_fastq --------------------------------------------
+[[rules]]
+name = "chm_to_fastq"
+description = "Convert the name-sorted CHM1 alignment to FASTQ pairs (samtools fastq)"
+when = "config.benchmarking_activate"
+input = ["resources/chm.namesorted.bam"]
+output = [
+    "resources/chm.1.fq.gz",
+    "resources/chm.2.fq.gz",
+]
+shell = "samtools fastq {input} -1 {output[0]} -2 {output[1]} 2> {log}"
+log = "logs/benchmarking/samtools-fastq.log"
+
+[rules.environment]
+conda = "envs/samtools.yaml"
+
+# ---- upstream rule: chm_eval_kit --------------------------------------------
+# CHM-eval kit download (github.com/lh3/CHM-eval releases, tag v0.5 / version
+# 20180222). Upstream output is a directory; oxo-flow outputs are files, so
+# the rule declares a .kit_complete marker while the kit files land in
+# resources/benchmarking/chm-eval-kit/ as upstream.
+[[rules]]
+name = "chm_eval_kit"
+description = "Download the CHM-eval kit (curl + tar, CHM-eval v0.5 release)"
+when = "config.benchmarking_activate"
+output = ["resources/benchmarking/chm-eval-kit/.kit_complete"]
+shell = """
+(mkdir -p resources/benchmarking/chm-eval-kit && \
+ curl -L https://github.com/lh3/CHM-eval/releases/download/v0.5/CHM-evalkit-20180222.tar \
+   | tar --strip-components 1 -C resources/benchmarking/chm-eval-kit -xf - && \
+ (cd resources/benchmarking/chm-eval-kit; chmod +x htsbox run-eval k8) && \
+ touch {output}) 2> {log}
+"""
+log = "logs/benchmarking/chm-eval-kit.log"
+
+[rules.environment]
+conda = "envs/curl.yaml"
 
 # ---- upstream rule: chromosome_map ------------------------------------------
 [[rules]]
@@ -85,3 +164,28 @@ log = "logs/benchmarking/some_id.rename-chromosomes.log"
 
 [rules.environment]
 conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: chm_eval ------------------------------------------------
+# CHM-eval against the chr-mapped calls (kit run-eval -g 38; build=38,
+# extra=""). The input vcf is the rename_chromosomes output, which depends on
+# the chm group final-calls (not ported — see module header), so the rule is
+# a faithful port with an orphan input chain.
+[[rules]]
+name = "chm_eval"
+description = "Evaluate the chr-mapped calls against the CHM-eval kit (run-eval -g 38)"
+when = "config.benchmarking_activate"
+input = [
+    "resources/benchmarking/chm-eval-kit/.kit_complete",
+    "benchmarking/some_id.chr-mapped.vcf",
+]
+output = [
+    "benchmarking/some_id.summary",
+    "benchmarking/some_id.err.bed.gz",
+]
+shell = """
+(resources/benchmarking/chm-eval-kit/run-eval -g 38 -o benchmarking/some_id {input[1]} | sh) 2> {log}
+"""
+log = "logs/benchmarking/some_id.chm-eval.log"
+
+[rules.environment]
+conda = "envs/curl.yaml"

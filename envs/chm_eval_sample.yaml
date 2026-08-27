@@ -1,0 +1,11 @@
+# chm-eval-sample — pinned exactly to the snakemake-wrappers v2.3.2
+# bio/benchmark/chm-eval-sample wrapper environment.yaml (the upstream rule
+# has no conda directive and relies on the wrapper env).
+name: chm_eval_sample
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - samtools =1.24
+  - curl

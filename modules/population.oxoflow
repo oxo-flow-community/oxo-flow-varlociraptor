@@ -16,10 +16,12 @@
 #     `config.population_db_activate || config.mutational_burden_activate`.
 #     The upstream wildcards are frozen: group=SRR702070_group,
 #     calling_type=variants (the port has no fusions calling),
-#     scatteritem=0. get_gather_annotated_calls_input resolves to the
-#     db_annotated callset (annotations/vcfs is active in the default config),
-#     which is the port's results/calls/db_annotated/...variants.0.bcf; the
-#     output is results/final-calls/{group}/{group}.variants.annotated.bcf.
+#     scatteritem=0. The input selection is config-driven
+#     (config.annotation_selection, upstream get_final_selected_annotation):
+#     "db_annotated" by default (annotations/vcfs is active in the default
+#     config) -> results/calls/db_annotated/...variants.0.bcf, or
+#     "dgidb_annotated" when dgidb is activated; the output is
+#     results/final-calls/{group}/{group}.variants.annotated.bcf.
 #     NOTE: this is the file the task brief refers to as
 #     results/final-calls/{group}.variants.annotated.bcf — the port keeps the
 #     upstream path shape (with the group subdirectory).
@@ -68,8 +70,8 @@ name = "gather_annotated_calls"
 description = "Gather the annotated calls (bcftools concat v2.3.2 wrapper, -a)"
 when = "config.population_db_activate || config.mutational_burden_activate"
 input = [
-    "results/calls/db_annotated/SRR702070_group/SRR702070_group.variants.0.bcf",
-    "results/calls/db_annotated/SRR702070_group/SRR702070_group.variants.0.bcf.csi",
+    "results/calls/{config.annotation_selection}/SRR702070_group/SRR702070_group.variants.0.bcf",
+    "results/calls/{config.annotation_selection}/SRR702070_group/SRR702070_group.variants.0.bcf.csi",
 ]
 output = ["results/final-calls/SRR702070_group/SRR702070_group.variants.annotated.bcf"]
 shell = "bcftools concat --output {output} --output-type b -a {input[0]} 2> {log}"
@@ -85,8 +87,8 @@ conda = "envs/bcftools.yaml"
 name = "annotated_index"
 description = "Index the db_annotated calls (bcftools index)"
 when = "config.population_db_activate || config.mutational_burden_activate"
-input = ["results/calls/db_annotated/SRR702070_group/SRR702070_group.variants.0.bcf"]
-output = ["results/calls/db_annotated/SRR702070_group/SRR702070_group.variants.0.bcf.csi"]
+input = ["results/calls/{config.annotation_selection}/SRR702070_group/SRR702070_group.variants.0.bcf"]
+output = ["results/calls/{config.annotation_selection}/SRR702070_group/SRR702070_group.variants.0.bcf.csi"]
 shell = "bcftools index {input} 2> {log}"
 log = "logs/bcf-index/db_annotated/SRR702070_group/SRR702070_group.variants.0.log"
 
