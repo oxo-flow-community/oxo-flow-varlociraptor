@@ -17,6 +17,10 @@
 #   * control_fdr fdr 0.05, mode local-smart, no --smart-retain-artifacts.
 #   * get_annotation_filter_aux_files resolves config/super_interesting_genes.tsv
 #     relative to the workflow root, exactly as upstream.
+#   * filter_by_annotation consumes the selected annotated callset via
+#     config.annotation_selection (upstream get_annotated_bcf ->
+#     get_final_selected_annotation): "db_annotated" by default,
+#     "dgidb_annotated" when dgidb is activated.
 
 [workflow]
 name = "filtering"
@@ -29,8 +33,8 @@ name = "filtering"
 name = "filter_by_annotation"
 description = "Keep HIGH-impact variants in super-interesting genes (vembrane filter)"
 input = [
-    "results/calls/db_annotated/SRR702070_group/SRR702070_group.variants.0.bcf",
-    "results/calls/db_annotated/SRR702070_group/SRR702070_group.variants.0.bcf.csi",
+    "results/calls/{config.annotation_selection}/SRR702070_group/SRR702070_group.variants.0.bcf",
+    "results/calls/{config.annotation_selection}/SRR702070_group/SRR702070_group.variants.0.bcf.csi",
     "config/super_interesting_genes.tsv",
 ]
 output = ["results/calls/filtered/filtered_ann/SRR702070_group/some_id/SRR702070_group.variants.0.bcf"]

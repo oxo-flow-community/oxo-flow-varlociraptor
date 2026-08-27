@@ -60,9 +60,11 @@ cd oxo-flow-varlociraptor
   human-pangenomics bucket). To use pre-downloaded databases instead, place
   them at the paths the `ref::` rules declare (see `modules/ref.oxoflow`
   `output =` lines) and run with `skip_ref_downloads=true`.
-- **Compute** — up to 96 CPUs / 32 GB per rule (freebayes candidate calling:
-  96 threads; vg giraffe mapping: 64 threads; samtools sort: 16 threads / 32G;
-  Varlociraptor calling: 8G).
+- **Compute** — up to 64 CPUs / 32 GB per rule on the default path (freebayes
+  candidate calling: 48 threads — upstream 96, scaled to the live box; vg
+  giraffe mapping: 64 threads; samtools sort: 16 threads / 32G; Varlociraptor
+  calling: 8G; consensus/bam-name sorting: 16 threads / 64G when the gated
+  branches are on).
 - **Tools** — conda environments with pinned versions, one env per tool pin
   set under `envs/` (declared per rule via `[rules.environment]` in the
   module files). No containers are used; conda/mamba is required at runtime.
@@ -96,11 +98,13 @@ sample group (`SRR702070_group`, sample `SRR702070`, alias `tumor`, purity
 Varlociraptor calling + FDR control over 8 variant types, VEP/dbSNFP
 annotation, filtering, and the datavzrd report. The upstream branch modules
 (trimming, primers, MAF export, population-db filtering, plugins, CHM1
-benchmarking, bwa alignment, mutational burden/signatures, fusion calling)
-are ported as gated modules, off by default — see "Gated branch modules".
-`oxo-flow validate` counts every rule unconditionally: 135 rules / 259
-dependencies (88 rules / 163 on the default path alone; the executor skips
-gated rules at run time when their key is `false`).
+benchmarking, bwa alignment, consensus-read calling, mutational
+burden/signatures, fusion calling) are ported as gated modules, off by
+default — see "Gated branch modules"; DGIdb annotation of the final calls
+lives in `annotation.oxoflow`, also gated.
+`oxo-flow validate` counts every rule unconditionally: 149 rules / 256
+dependencies (88 rules execute on the default path alone; the executor skips
+the 61 gated rules at run time when their key is `false`).
 
 ### Configuration
 
@@ -115,9 +119,13 @@ gated rules at run time when their key is `false`).
 | `bwa_align_activate` | linear-reference branch of `mapping.smk` | `false` | `map_reads_bwa` + `bwa_index` (the default path aligns with vg giraffe) |
 | `mutational_burden_activate` / `mutational_burden_events` | `mutational_burden/*` | `false` / `somatic_tumor_low,somatic_tumor_medium,somatic_tumor_high` | covered-coding-sites count + burden curve/hist (events comma-joined) |
 | `mutational_signatures_activate` | `mutational_signatures` section | `false` | COSMIC v3.4 signature fitting + plots |
-| `benchmarking_activate` | `benchmarking.smk` | `false` | CHM1 benchmark rules that need no third-party downloads |
+| `benchmarking_activate` | `benchmarking.smk` | `false` | CHM1/CHM13 benchmark flow (EBI alignment + CHM-eval kit downloads; the chm sample group vertical slice is not ported) |
 | `plugins_activate` / `cadd_build` / `cadd_version` / `cadd_variant_type` | `plugins.smk` / `wildcards` | `false` / `GRCh38` / `v1.7` / `snv` | CADD score download for VEP |
 | `fusion_activate` | `fusion_calling.smk` (star_arriba meta wrapper) | `false` | STAR + Arriba fusion candidate calling |
+| `consensus_activate` | `calc_consensus_reads/activate` | `false` | fragment-consensus read collapse + re-mapping to the bwa reference (8 rules); combine with `bwa_align_activate`, `markduplicates_extra = "--TAG_DUPLICATE_SET_MEMBERS true"` and `freebayes_min_alternate_count = 1` |
+| `dgidb_activate` / `annotation_selection` | `annotations/dgidb` / `get_final_selected_annotation` | `false` / `db_annotated` | DGIdb annotation of the final calls; set `annotation_selection = "dgidb_annotated"` together with `dgidb_activate` |
+| `freebayes_min_alternate_count` | `params/freebayes` | `2` | upstream: `1` when consensus reads are on |
+| `markduplicates_extra` | `params/picard/MarkDuplicates` + `get_markduplicates_extra` | `""` | extra MarkDuplicates args; upstream adds `--TAG_DUPLICATE_SET_MEMBERS true` when consensus reads are on |
 
 The remaining upstream parameters of the ported path are pinned to the
 upstream default values (see `config/scenario.yaml` and the module files):
@@ -129,22 +137,23 @@ REVEL score file `resources/revel_scores.tsv.gz`, dbSNFP
 
 ### Gated branch modules
 
-Nine upstream branch modules are ported as separate files under `modules/`,
+Ten upstream branch modules are ported as separate files under `modules/`,
 each gated by `when = "config.<key>_activate"` (default `false`, so the
 default path is unchanged). Each module header documents its rule map,
 frozen wildcards, deviations, and excluded upstream rules:
 
 | module | upstream rules | notes |
 |---|---|---|
-| `modules/trimming.oxoflow` | SRA download + fastp | no `envs/sra-tools.yaml`/`envs/fastp.yaml` in the repo — base env |
+| `modules/trimming.oxoflow` | SRA download + fastp | `envs/sra_tools.yaml` + `envs/fastp.yaml` |
 | `modules/primers.oxoflow` | fgbio primer flow | primer panel frozen to `uniform`; needs `bwa_index` |
 | `modules/maf.oxoflow` | vcf2maf.pl export | fusions pair has no upstream producer in the port (no fusions calling) |
-| `modules/population.oxoflow` | population-db filter/update + `gather_annotated_calls` | db read as-is, no input edge (upstream `before_update` flag) |
+| `modules/population.oxoflow` | population-db filter/update + `gather_annotated_calls` | db read as-is, no input edge (upstream `before_update` flag); annotated-callset selection via `config.annotation_selection` |
 | `modules/plugins.oxoflow` | CADD download | REVEL rules already ported in `ref.oxoflow` |
-| `modules/benchmarking.oxoflow` | CHM1 benchmark (3 rules) | `chm_eval_sample`/`chm_eval_kit`/`chm_eval` excluded (13 GB + third-party downloads) |
-| `modules/mapping_bwa.oxoflow` | bwa index + align | no `envs/bwa.yaml` in the repo — base env |
+| `modules/benchmarking.oxoflow` | CHM1 benchmark (8 rules) | full CHM-eval flow incl. the EBI alignment + CHM-eval kit downloads; the chm sample group vertical slice (chm reads through calling/filtering) is not ported |
+| `modules/mapping_bwa.oxoflow` | bwa index + align | `envs/bwa.yaml` |
 | `modules/burden_signatures.oxoflow` | mutational burden + signatures | 20 VAF thresholds (5..100 step 5); `gather_annotated_calls` feeds the burden input |
-| `modules/fusion.oxoflow` | star_arriba candidate calling | ends at the group candidate BCF; no `envs/star.yaml` in the repo — base env |
+| `modules/consensus.oxoflow` | consensus-read calling flow (8 rules) | `calc_consensus_reads` + re-mapping + BQSR on the consensus BAM; needs the bwa index |
+| `modules/fusion.oxoflow` | star_arriba candidate calling | ends at the group candidate BCF; `envs/star.yaml` + `envs/arriba.yaml` |
 
 ## Source
 
@@ -157,7 +166,7 @@ deliberate deviations:
 
 | upstream | port | reason |
 |---|---|---|
-| `scatter.calling(16)` (rules run 16x, once per scatter item) | single chunk, `scatteritem=0` | oxo-flow has no scatter construct; with one small sample the 16 chunks are identical work |
+| `scatter.calling(16)` (rules run 16x, once per scatter item) | single chunk, `scatteritem=0` | the port freezes `scatteritem=0`; `rbt vcf-split` with one output chunk writes the whole callset, so the chunk content is identical to upstream's 16 chunks gathered with `bcftools concat -a` before `control_fdr` (oxo-flow does have a scatter construct; it is not exercised because the port's single sample makes the split work-identical) |
 | rule outputs that are directories (VEP cache/plugins, oncoprint `label_sortings/`/`variant-oncoprints/` dirs) | directory + `.completed` marker file output | oxo-flow targets files, not directories |
 | scenario rendered at run time from `config/scenario.yaml` (yte template) | pre-rendered `resources/scenarios/SRR702070_group.yaml` for the default sample group; the template is kept verbatim at `config/scenario.yaml` | one scenario (purity 1.0) in the default path |
 | `download_vep_plugins.py` with a hard-coded Ensembl variation FTP list and fallback | the `--release`/`--output`/`--log` argv variant of the same wrapper port | one release (111), one output dir; the FTP fallback list was dropped as dead code in the default path |
@@ -171,7 +180,9 @@ deliberate deviations:
 | snakemake `before_update`/`update` flags (population db) | no input edge; the db path is read/written as-is | oxo-flow has no such flags; a declared input would create a DAG cycle (`validate` rejects it) |
 | snakemake `temp()` outputs of the gated branch modules | plain outputs (`temporary = true` where the default path used it) | see the module headers; `join_mutational_signatures` writes with `>` instead of the upstream `>>` because the engine does not pre-delete outputs |
 | snakemake script API (`snakemake.input/output/params`) in the 6 branch scripts | argv ports (`--output`/`--log` flags, comma-joined lists) | same logic verbatim, cf. the default-path script ports |
-| `chm_eval_sample`/`chm_namesort`/`chm_to_fastq`/`chm_eval_kit`/`chm_eval` (benchmarking) | excluded | 13 GB CHM1 alignment + third-party CHM-eval kit downloads; the ported rules keep the orphan inputs that would only be produced by them |
+| chm sample group vertical slice (benchmarking) | not ported | the ported CHM-eval flow (`chm_eval_sample` ... `chm_eval`) re-derives the CHM1 FASTQs, but the chm sample is not in the port's `config/samples.tsv`, so the chm reads do not flow through mapping -> calling -> `control_fdr`; `rename_chromosomes`/`chm_eval` keep orphan inputs (validate warns, like upstream without the chm sample) |
+| consensus-read calling (`calc_consensus_reads` flow) | `consensus.oxoflow`, gated on `consensus_activate` | upstream switches the `recalibrate_base_qualities`/`apply_bqsr` input via `get_recalibrate_quality_input`; the port models this as gated duplicate rules with the same outputs and exclusive `when` gates (`!consensus_activate` vs `consensus_activate`) |
+| `annotate_dgidb` | `annotation::annotate_dgidb`, gated on `dgidb_activate` + `annotation_selection` | upstream `get_final_selected_annotation` switches the annotated callset consumed by filtering and the final-calls chain; the port exposes the same selection as `config.annotation_selection` |
 
 ## Test
 

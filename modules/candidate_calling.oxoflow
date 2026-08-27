@@ -17,9 +17,12 @@
 name = "candidate_calling"
 
 # ---- upstream rule: freebayes ----------------------------------------------
-# freebayes v2.7.0 wrapper (96 threads; --pooled-continuous
+# freebayes v2.7.0 wrapper (--pooled-continuous
 # --min-alternate-count 2 --min-alternate-fraction 0.05; region chunks of
-# 100 kb intersected with the expanded filtered regions).
+# 100 kb intersected with the expanded filtered regions). The min-alternate
+# count comes from config (upstream: 2, or 1 when calc_consensus_reads is
+# active — set config.freebayes_min_alternate_count to 1 with
+# consensus_activate).
 [[rules]]
 name = "freebayes"
 description = "Call candidate variants with freebayes (freebayes v2.7.0 wrapper)"
@@ -42,7 +45,7 @@ if [ ! -s {input[2]} ]; then
 fi
 tmpdir=$(mktemp -d) && \
 (freebayes-parallel <(bedtools intersect -a <(sed 's#\([0-9]*\):\([0-9]*\)-\([0-9]*\)$#\1\t\2\t\3#' <(fasta_generate_regions.py {input[1]} 100000)) -b {input[2]} | sed 's/\t\([0-9]*\)\t\([0-9]*\)$/:\1-\2/') 96 \
-  --fasta-reference {input[0]} --pooled-continuous --min-alternate-count 2 --min-alternate-fraction 0.05 {input[3]} \
+  --fasta-reference {input[0]} --pooled-continuous --min-alternate-count {config.freebayes_min_alternate_count} --min-alternate-fraction 0.05 {input[3]} \
   | bcftools sort --max-mem 205M --temp-dir "$tmpdir" \
   | bcftools view --threads 95 --output {output} --output-type b) 2> {log} && \
 rm -rf "$tmpdir"
@@ -50,9 +53,9 @@ rm -rf "$tmpdir"
 log = "logs/freebayes/SRR702070_group.log"
 
 [rules.resources]
-# upstream runs on a 96-core cluster; scale to the machine instead of
-# hardcoding (live: resource exhausted on the 64-core box)
-# upstream runs on a 96-core cluster; this box has 64 cores (live: resource exhausted)
+# upstream runs freebayes-parallel with 96 jobs (the shell's literal 96);
+# the port scales the rule's own thread budget to this machine (live:
+# resource exhausted on the 64-core box at 96)
 threads = 48
 
 [rules.environment]

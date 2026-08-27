@@ -1,0 +1,251 @@
+# Consensus-read calling flow (upstream workflow/rules/mapping.smk +
+# common.smk get_recalibrate_quality_input / get_consensus_input /
+# get_processed_consensus_input, gated on upstream config
+# calc_consensus_reads/activate).
+#
+# When activated, the dedup BAM is collapsed to fragment-consensus reads
+# (rbt collapse-reads-to-fragments), the consensus reads are re-mapped to the
+# linear bwa reference, merged with the skipped reads, sorted, indexed, and
+# the BQSR recalibration/apply steps run on the consensus BAM instead of the
+# dedup BAM.
+#
+# Rule map (upstream rule -> this module):
+#   calc_consensus_reads       -> consensus::calc_consensus_reads       (rbt)
+#   map_consensus_reads        -> consensus::map_consensus_reads_{pe,se}
+#                                 (bwa mem v2.3.2 wrapper; read_type
+#                                 wildcard frozen into the two rules)
+#   merge_consensus_reads      -> consensus::merge_consensus_reads      (samtools merge v9.15.0)
+#   sort_consensus_reads       -> consensus::sort_consensus_reads       (samtools sort v9.15.0)
+#   bam_index                  -> consensus::bam_index_consensus        (samtools index v9.15.0)
+#   recalibrate_base_qualities -> consensus::recalibrate_base_qualities_consensus
+#   apply_bqsr                 -> consensus::apply_bqsr_consensus
+#
+# Deviations (details in README.md):
+#   * Upstream switches the INPUT of the single recalibrate_base_qualities /
+#     apply_bqsr rules (get_recalibrate_quality_input). The port models this
+#     as gated duplicate rules with the same outputs: the default rules in
+#     mapping.oxoflow gain when="!config.consensus_activate" and the _consensus
+#     variants here are gated on the same key. The when gates are exclusive,
+#     so exactly one rule produces results/recal/SRR702070.grp(.bam) per run.
+#   * map_consensus_reads freezes read_type (pe|se) into two rules; the
+#     upstream wildcard_constraints are gone with the wildcard.
+#   * The bwa index inputs are the port's mapping_bwa::bwa_index outputs
+#     (resources/genome.dna.homo_sapiens.GRCh38.111.*), gated on
+#     config.bwa_align_activate || config.primers_activate upstream but
+#     consumed here unconditionally — activating consensus requires the bwa
+#     index (upstream resolves it via rules.bwa_index output the same way).
+#   * Upstream mark_duplicates gains --TAG_DUPLICATE_SET_MEMBERS true when
+#     calc_consensus_reads is active (get_markduplicates_extra); the port
+#     exposes this as config key markduplicates_extra ("" by default, set to
+#     "--TAG_DUPLICATE_SET_MEMBERS true" together with consensus_activate).
+#     Upstream freebayes drops --min-alternate-count to 1 with consensus
+#     reads; the port exposes config key freebayes_min_alternate_count
+#     (default 2, set to 1 together with consensus_activate).
+
+[workflow]
+name = "consensus"
+
+# ---- upstream rule: calc_consensus_reads ------------------------------------
+# rbt collapse-reads-to-fragments over the dedup BAM; upstream marks all four
+# outputs temp().
+[[rules]]
+name = "calc_consensus_reads"
+description = "Collapse dedup reads to fragment-consensus reads (rbt collapse-reads-to-fragments)"
+when = "config.consensus_activate"
+input = ["results/dedup/SRR702070.bam"]
+output = [
+    "results/consensus/fastq/SRR702070.1.fq",
+    "results/consensus/fastq/SRR702070.2.fq",
+    "results/consensus/fastq/SRR702070.se.fq",
+    "results/consensus/SRR702070.skipped.bam",
+]
+shell = "rbt collapse-reads-to-fragments bam {input[0]} {output[0]} {output[1]} {output[2]} {output[3]} &> {log}"
+log = "logs/consensus/SRR702070.log"
+
+[rules.environment]
+conda = "envs/rbt.yaml"
+
+# ---- upstream rule: map_consensus_reads (read_type = pe) --------------------
+# bwa mem v2.3.2 wrapper (8 threads; extra "-C -R '@RG\\tID:SRR702070\\tSM:
+# SRR702070\\tPL:ILLUMINA'"; sort=samtools coordinate).
+[[rules]]
+name = "map_consensus_reads_pe"
+description = "Map consensus paired-end reads to the linear reference (bwa mem v2.3.2 wrapper)"
+when = "config.consensus_activate"
+input = [
+    "results/consensus/fastq/SRR702070.1.fq",
+    "results/consensus/fastq/SRR702070.2.fq",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.amb",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.ann",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.bwt",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.pac",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.sa",
+]
+output = ["results/consensus/SRR702070.consensus.pe.mapped.bam"]
+shell = """
+tmpdir=$(mktemp -d) && \
+(bwa mem -t 8 -C -R '@RG\\tID:SRR702070\\tSM:SRR702070\\tPL:ILLUMINA' \
+  resources/genome.dna.homo_sapiens.GRCh38.111 {input[0]} {input[1]} \
+  | samtools sort --threads 7 -T "$tmpdir/bwa_sort" -o {output}) 2> {log} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/bwa_mem/SRR702070.pe.consensus.log"
+
+[rules.resources]
+threads = 8
+
+[rules.environment]
+conda = "envs/bwa.yaml"
+
+# ---- upstream rule: map_consensus_reads (read_type = se) --------------------
+[[rules]]
+name = "map_consensus_reads_se"
+description = "Map consensus single-end reads to the linear reference (bwa mem v2.3.2 wrapper)"
+when = "config.consensus_activate"
+input = [
+    "results/consensus/fastq/SRR702070.se.fq",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.amb",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.ann",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.bwt",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.pac",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.sa",
+]
+output = ["results/consensus/SRR702070.consensus.se.mapped.bam"]
+shell = """
+tmpdir=$(mktemp -d) && \
+(bwa mem -t 8 -C -R '@RG\\tID:SRR702070\\tSM:SRR702070\\tPL:ILLUMINA' \
+  resources/genome.dna.homo_sapiens.GRCh38.111 {input[0]} \
+  | samtools sort --threads 7 -T "$tmpdir/bwa_sort" -o {output}) 2> {log} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/bwa_mem/SRR702070.se.consensus.log"
+
+[rules.resources]
+threads = 8
+
+[rules.environment]
+conda = "envs/bwa.yaml"
+
+# ---- upstream rule: merge_consensus_reads -----------------------------------
+# samtools merge v9.15.0 wrapper (8 threads).
+[[rules]]
+name = "merge_consensus_reads"
+description = "Merge mapped consensus reads with the skipped reads (samtools merge v9.15.0 wrapper)"
+when = "config.consensus_activate"
+input = [
+    "results/consensus/SRR702070.skipped.bam",
+    "results/consensus/SRR702070.consensus.se.mapped.bam",
+    "results/consensus/SRR702070.consensus.pe.mapped.bam",
+]
+output = ["results/consensus/SRR702070.merged.bam"]
+shell = "samtools merge --threads 7 -o {output} {input[0]} {input[1]} {input[2]} 2> {log}"
+log = "logs/samtools_merge/SRR702070.log"
+
+[rules.resources]
+threads = 8
+
+[rules.environment]
+conda = "envs/samtools.yaml"
+
+# ---- upstream rule: sort_consensus_reads ------------------------------------
+# samtools sort v9.15.0 wrapper (16 threads, 64000 MiB -> -m 3600M).
+[[rules]]
+name = "sort_consensus_reads"
+description = "Coordinate-sort the merged consensus BAM (samtools sort v9.15.0 wrapper)"
+when = "config.consensus_activate"
+input = ["results/consensus/SRR702070.merged.bam"]
+output = ["results/consensus/SRR702070.bam"]
+shell = """
+tmpdir=$(mktemp -d) && \
+samtools sort --threads 15 -o {output} --output-fmt BAM -m 3600M -T "$tmpdir/samtools_sort" {input} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/samtools_sort/SRR702070.log"
+
+[rules.resources]
+threads = 16
+memory = "64G"
+
+[rules.environment]
+conda = "envs/samtools.yaml"
+
+# ---- upstream rule: bam_index (consensus bam) -------------------------------
+# samtools index v9.15.0 wrapper; the dedup bam_index instance in
+# mapping.oxoflow does not cover this path.
+[[rules]]
+name = "bam_index_consensus"
+description = "Index the consensus BAM (samtools index v9.15.0 wrapper)"
+when = "config.consensus_activate"
+input = ["results/consensus/SRR702070.bam"]
+output = ["results/consensus/SRR702070.bai"]
+shell = "samtools index {input} {output} 2> {log}"
+log = "logs/bam-index/consensus/SRR702070.log"
+
+[rules.environment]
+conda = "envs/samtools.yaml"
+
+# ---- upstream rule: recalibrate_base_qualities (consensus input) ------------
+# Same command as mapping::recalibrate_base_qualities, but consuming the
+# consensus BAM (upstream get_recalibrate_quality_input with
+# calc_consensus_reads active). Duplicate output of the default rule; the
+# when gates are exclusive (see module header).
+[[rules]]
+name = "recalibrate_base_qualities_consensus"
+description = "Build the BQSR recalibration table from consensus reads (baserecalibratorspark v1.25.0 wrapper)"
+when = "config.consensus_activate"
+input = [
+    "results/consensus/SRR702070.bam",
+    "results/consensus/SRR702070.bai",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.dict",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+    "resources/variation.noiupac.vcf.gz",
+    "resources/variation.noiupac.vcf.gz.tbi",
+]
+output = ["results/recal/SRR702070.grp"]
+shell = """
+tmpdir=$(mktemp -d) && \
+(gatk --java-options '-Xmx819M -Djava.io.tmpdir='"$tmpdir" BaseRecalibratorSpark \
+  --input {input[0]} --reference {input[2]} --tmp-dir "$tmpdir" \
+  --output {output} --known-sites {input[5]} \
+  -- --spark-runner LOCAL --spark-master local[8]) 2> {log} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/gatk/baserecalibrator/SRR702070.consensus.log"
+
+[rules.resources]
+threads = 8
+memory = "1G"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+# ---- upstream rule: apply_bqsr (consensus input) ----------------------------
+[[rules]]
+name = "apply_bqsr_consensus"
+description = "Apply BQSR to consensus reads with GATK ApplyBQSR (applybqsr v2.3.2 wrapper)"
+when = "config.consensus_activate"
+input = [
+    "results/consensus/SRR702070.bam",
+    "results/consensus/SRR702070.bai",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.dict",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+    "results/recal/SRR702070.grp",
+]
+output = [
+    "results/recal/SRR702070.bam",
+    "results/recal/SRR702070.bai",
+]
+protected_output = ["results/recal/SRR702070.bam"]
+shell = """
+tmpdir=$(mktemp -d) && \
+(gatk --java-options '-Xmx164M -Djava.io.tmpdir='"$tmpdir" ApplyBQSR \
+  --input {input[0]} --bqsr-recal-file {input[5]} --reference {input[2]} \
+  --tmp-dir "$tmpdir" --output {output[0]}) 2> {log} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/gatk/gatk_applybqsr/SRR702070.consensus.log"
+
+[rules.environment]
+conda = "envs/gatk.yaml"

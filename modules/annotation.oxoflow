@@ -6,14 +6,22 @@
 #                           --everything --check_existing --vcf_info_field ANN
 #                           --hgvsg, plugins LoFtool + REVEL)
 #   annotate_vcfs       -> annotation::annotate_vcfs
+#   annotate_dgidb      -> annotation::annotate_dgidb
+#                          (rbt vcf-annotate-dgidb, gated on dgidb_activate)
 #   bcf_index           -> annotation::bcf_index_vep_annotated
 #                          (bcftools index v2.6.0 wrapper)
 #
 # Deviations (details in README.md):
-#   * gather_annotated_calls is not in the default path: benchmarking is not
-#     activated and the some_id event defines filters, so control_fdr reads
-#     the filtered calls instead of results/final-calls/*.annotated.bcf.
-#   * annotate_dgidb is not in the default path (dgidb not activated).
+#   * gather_annotated_calls (upstream annotation.smk) is ported in
+#     population.oxoflow, gated on
+#     `config.population_db_activate || config.mutational_burden_activate`.
+#     Its input selection is config-driven via config.annotation_selection
+#     (upstream get_final_selected_annotation): "db_annotated" by default
+#     (annotations/vcfs is active), "dgidb_annotated" when activating dgidb.
+#   * Upstream's gather_annotated_calls requests a .csi for the selected
+#     callset but no rule produces the dgidb one (annotation.smk has no
+#     bcf_index for dgidb_annotated); the port's population::annotated_index
+#     indexes whatever the selection key points to, covering both.
 #   * Candidate VEP inputs (revel) are passed as in the upstream input
 #     function get_plugin_aux; the stats.html output is kept byte-identical.
 
@@ -95,3 +103,19 @@ log = "logs/bcf-index/calls/vep_annotated/SRR702070_group/SRR702070_group.varian
 
 [rules.environment]
 conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: annotate_dgidb ------------------------------------------
+# rbt vcf-annotate-dgidb over the db_annotated callset (upstream
+# get_annotate_dgidb_input: db_annotated while annotations/vcfs is active;
+# datasources = config annotations/dgidb/datasources = [DrugBank]).
+[[rules]]
+name = "annotate_dgidb"
+description = "Annotate calls with Drug-Gene Interaction Database entries (rbt vcf-annotate-dgidb)"
+when = "config.dgidb_activate"
+input = ["results/calls/db_annotated/SRR702070_group/SRR702070_group.variants.0.bcf"]
+output = ["results/calls/dgidb_annotated/SRR702070_group/SRR702070_group.variants.0.bcf"]
+shell = "(rbt vcf-annotate-dgidb {input[0]} -s DrugBank > {output}) 2> {log}"
+log = "logs/annotate-dgidb/SRR702070_group/SRR702070_group.variants.log"
+
+[rules.environment]
+conda = "envs/rbt.yaml"

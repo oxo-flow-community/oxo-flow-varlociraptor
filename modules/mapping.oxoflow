@@ -115,6 +115,10 @@ conda = "envs/samtools.yaml"
 
 # ---- upstream rule: mark_duplicates ----------------------------------------
 # picard markduplicates v2.5.0 wrapper (3000 MiB, java overhead 0.3 -> -Xmx2100M).
+# config.markduplicates_extra renders upstream get_markduplicates_extra
+# (--TAG_DUPLICATE_SET_MEMBERS true when calc_consensus_reads is active;
+# empty by default — the default-path command keeps the byte-identical shape
+# modulo the trailing space).
 [[rules]]
 name = "mark_duplicates"
 description = "Mark PCR duplicates with picard MarkDuplicates (markduplicates v2.5.0 wrapper)"
@@ -127,7 +131,7 @@ shell = """
 tmpdir=$(mktemp -d) && \
 (picard MarkDuplicates -Xmx2100M -Djava.io.tmpdir="$tmpdir" \
   --VALIDATION_STRINGENCY LENIENT --INPUT {input} --TMP_DIR "$tmpdir" \
-  --OUTPUT {output[0]} --METRICS_FILE {output[1]}) 2> {log} && \
+  --OUTPUT {output[0]} --METRICS_FILE {output[1]} {config.markduplicates_extra}) 2> {log} && \
 rm -rf "$tmpdir"
 """
 log = "logs/picard/dedup/SRR702070.log"
@@ -153,10 +157,14 @@ conda = "envs/samtools.yaml"
 
 # ---- upstream rule: recalibrate_base_qualities -----------------------------
 # gatk baserecalibratorspark v1.25.0 wrapper (8 threads, 1024 MiB ->
-# -Xmx819M, --spark-master local[8]).
+# -Xmx819M, --spark-master local[8]). Gated off by consensus_activate: with
+# consensus reads on, the consensus::recalibrate_base_qualities_consensus
+# variant (same outputs) takes over, mirroring upstream
+# get_recalibrate_quality_input.
 [[rules]]
 name = "recalibrate_base_qualities"
 description = "Build the BQSR recalibration table (baserecalibratorspark v1.25.0 wrapper)"
+when = "!config.consensus_activate"
 input = [
     "results/dedup/SRR702070.bam",
     "results/dedup/SRR702070.bai",
@@ -187,10 +195,12 @@ conda = "envs/gatk.yaml"
 # ---- upstream rule: apply_bqsr ---------------------------------------------
 # gatk applybqsr v2.3.2 wrapper. The BAM index is produced by GATK itself
 # (upstream ruleorder: apply_bqsr > bam_index). The .bam is protected as
-# upstream (protected()).
+# upstream (protected()). Gated off by consensus_activate, like
+# recalibrate_base_qualities (see consensus module header).
 [[rules]]
 name = "apply_bqsr"
 description = "Apply BQSR with GATK ApplyBQSR (applybqsr v2.3.2 wrapper)"
+when = "!config.consensus_activate"
 input = [
     "results/dedup/SRR702070.bam",
     "results/dedup/SRR702070.bai",
