@@ -121,11 +121,14 @@ the 61 gated rules at run time when their key is `false`).
 | `mutational_signatures_activate` | `mutational_signatures` section | `false` | COSMIC v3.4 signature fitting + plots |
 | `benchmarking_activate` | `benchmarking.smk` | `false` | CHM1/CHM13 benchmark flow (EBI alignment + CHM-eval kit downloads; the chm sample group vertical slice is not ported) |
 | `plugins_activate` / `cadd_build` / `cadd_version` / `cadd_variant_type` | `plugins.smk` / `wildcards` | `false` / `GRCh38` / `v1.7` / `snv` | CADD score download for VEP |
-| `fusion_activate` | `fusion_calling.smk` (star_arriba meta wrapper) | `false` | STAR + Arriba fusion candidate calling |
+| `fusion_activate` | `fusion_calling.smk` (star_arriba meta wrapper) | `false` | STAR + Arriba fusion candidate calling; with a group whose `calling` metadata includes `fusions`, the candidates continue into the varlociraptor calling flow (`calling::*_arriba`, gated on the metadata) |
+| `target_regions` | `target_regions` list (regions.smk) | `""` | one BED path, merged + chr-stripped by `regions::get_target_regions`, intersected into the per-group regions, and the fixed candidates offtarget-filtered pre-scatter; empty = whole-genome calling as today |
 | `consensus_activate` | `calc_consensus_reads/activate` | `false` | fragment-consensus read collapse + re-mapping to the bwa reference (8 rules); combine with `bwa_align_activate`, `markduplicates_extra = "--TAG_DUPLICATE_SET_MEMBERS true"` and `freebayes_min_alternate_count = 1` |
 | `dgidb_activate` / `annotation_selection` | `annotations/dgidb` / `get_final_selected_annotation` | `false` / `db_annotated` | DGIdb annotation of the final calls; set `annotation_selection = "dgidb_annotated"` together with `dgidb_activate` |
 | `freebayes_min_alternate_count` | `params/freebayes` | `2` | upstream: `1` when consensus reads are on |
 | `markduplicates_extra` | `params/picard/MarkDuplicates` + `get_markduplicates_extra` | `""` | extra MarkDuplicates args; upstream adds `--TAG_DUPLICATE_SET_MEMBERS true` when consensus reads are on |
+
+Per-group calling mode: the upstream `config/samples.tsv` `calling` column (variants | fusions | variants,fusions) is ported as `[sample_groups.metadata] calling` (default row `variants`). The fusions continuation rules in `calling.oxoflow` are gated on it (`wildcard.calling == "fusions" || wildcard.calling == "variants,fusions"`), so groups without the row or with `variants` keep today's exact behavior.
 
 The remaining upstream parameters of the ported path are pinned to the
 upstream default values (see `config/scenario.yaml` and the module files):
@@ -142,18 +145,25 @@ each gated by `when = "config.<key>_activate"` (default `false`, so the
 default path is unchanged). Each module header documents its rule map,
 frozen wildcards, deviations, and excluded upstream rules:
 
+Two further upstream gates are ported inside the default-path modules
+(`regions.oxoflow`, `candidate_calling.oxoflow`, `calling.oxoflow`): the
+config-level `target_regions` (restrict per-group regions and offtarget-filter
+the fixed candidates pre-scatter) and the per-group `calling` metadata
+(fusions continuation). Both default to off / `variants`, keeping the default
+plan identical.
+
 | module | upstream rules | notes |
 |---|---|---|
 | `modules/trimming.oxoflow` | SRA download + fastp | `envs/sra_tools.yaml` + `envs/fastp.yaml` |
 | `modules/primers.oxoflow` | fgbio primer flow | primer panel frozen to `uniform`; needs `bwa_index` |
-| `modules/maf.oxoflow` | vcf2maf.pl export | fusions pair has no upstream producer in the port (no fusions calling) |
+| `modules/maf.oxoflow` | vcf2maf.pl export | fusions pair producer is the gated `calling::bcftools_concat_fusions` (calling mode fusions + `fusion_activate`); not produced in the default mode |
 | `modules/population.oxoflow` | population-db filter/update + `gather_annotated_calls` | db read as-is, no input edge (upstream `before_update` flag); annotated-callset selection via `config.annotation_selection` |
 | `modules/plugins.oxoflow` | CADD download | REVEL rules already ported in `ref.oxoflow` |
 | `modules/benchmarking.oxoflow` | CHM1 benchmark (8 rules) | full CHM-eval flow incl. the EBI alignment + CHM-eval kit downloads; the chm sample group vertical slice (chm reads through calling/filtering) is not ported |
 | `modules/mapping_bwa.oxoflow` | bwa index + align | `envs/bwa.yaml` |
 | `modules/burden_signatures.oxoflow` | mutational burden + signatures | 20 VAF thresholds (5..100 step 5); `gather_annotated_calls` feeds the burden input |
 | `modules/consensus.oxoflow` | consensus-read calling flow (8 rules) | `calc_consensus_reads` + re-mapping + BQSR on the consensus BAM; needs the bwa index |
-| `modules/fusion.oxoflow` | star_arriba candidate calling | ends at the group candidate BCF; `envs/star.yaml` + `envs/arriba.yaml` |
+| `modules/fusion.oxoflow` | star_arriba candidate calling | ends at the group candidate BCF; with the group's `calling` metadata including `fusions` the candidates continue into the varlociraptor calling flow (`calling::*_arriba`, gated); `envs/star.yaml` + `envs/arriba.yaml` |
 
 ## Source
 
@@ -183,6 +193,13 @@ deliberate deviations:
 | chm sample group vertical slice (benchmarking) | not ported | the ported CHM-eval flow (`chm_eval_sample` ... `chm_eval`) re-derives the CHM1 FASTQs, but the chm sample is not in the port's `config/samples.tsv`, so the chm reads do not flow through mapping -> calling -> `control_fdr`; `rename_chromosomes`/`chm_eval` keep orphan inputs (validate warns, like upstream without the chm sample) |
 | consensus-read calling (`calc_consensus_reads` flow) | `consensus.oxoflow`, gated on `consensus_activate` | upstream switches the `recalibrate_base_qualities`/`apply_bqsr` input via `get_recalibrate_quality_input`; the port models this as gated duplicate rules with the same outputs and exclusive `when` gates (`!consensus_activate` vs `consensus_activate`) |
 | `annotate_dgidb` | `annotation::annotate_dgidb`, gated on `dgidb_activate` + `annotation_selection` | upstream `get_final_selected_annotation` switches the annotated callset consumed by filtering and the final-calls chain; the port exposes the same selection as `config.annotation_selection` |
+| `filter_offtarget_variants` (wrapper v2.3.2/bio/bcftools/filter, `params.extra=""`) | pass-through `bcftools filter -o/-O b` on the fixed calls; the `regions`/index inputs are declared (as upstream) so `get_target_regions` and the candidate indexes exist pre-scatter | the pinned wrapper consumes only `input[0]` (verified against its source); the actual target-region restriction is the `filter_group_regions` bedtools intersect below |
+| `target_regions` list config | single BED path (`config.target_regions`) | upstream merges one or more files; the port freezes one path |
+| `filter_group_regions` `get_filter_targets` (bedtools intersect) | same command inline in the two `filter_group_regions_*` rules | byte-identical output; intersect branch only when `target_regions` is set |
+| per-group `calling` column of `config/samples.tsv` | `[sample_groups.metadata] calling` on each group | fusions continuation rules gate on `wildcard.calling == "fusions" || "variants,fusions"` |
+| `get_candidate_calls` for caller=arriba (UNFILTERED group concat) + `get_varlociraptor_params` (propagate-info-fields extra) | `calling::varlociraptor_preprocess_arriba`/`varlociraptor_call_arriba` consuming `results/candidate-calls/arriba/{group}/{group}.bcf` | command text identical; the arriba path has no scatter fan-out (no scatteritem) |
+| `scatter_candidates`/`filter_group_regions` conditional inputs (Python `if config.get("target_regions", None)`) | `optional = "any"` input pairs + `if [ -n "{config.target_regions}" ]` shell switch | engine equivalent of the upstream input selection |
+| upstream `get_target_regions` chr-strip (`awk '{sub("^chr","",$0); print}'`) | verbatim | target BEDs must be chr-less (Ensembl GRCh38 primary assembly); chr-prefixed files fail closed, exactly as upstream |
 
 ## Test
 

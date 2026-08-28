@@ -9,9 +9,13 @@
 #   annotate_candidate_variants -> candidate_calling::annotate_candidate_variants_{freebayes,delly}
 #                                  (vep annotate v8.0.0 wrapper)
 #   filter_candidates_by_annotation -> candidate_calling::filter_candidates_by_annotation_{freebayes,delly}
+#   filter_offtarget_variants -> candidate_calling::filter_offtarget_variants_{freebayes,delly}
+#   bcf_index (utils.smk)     -> candidate_calling::bcf_index_candidate_{freebayes,delly}
 #
-# filter_offtarget_variants is not in the default path (no target_regions in
-# config) — as upstream.
+# filter_offtarget_variants is off by default (target_regions empty in
+# config) — as upstream. With target_regions set, the fixed candidates are
+# indexed, offtarget-filtered pre-scatter, and scatter_candidates consumes
+# the filtered BCF (upstream input switch).
 
 [workflow]
 name = "candidate_calling"
@@ -101,15 +105,93 @@ log = "logs/fix_delly_calls/SRR702070_group.log"
 [rules.environment]
 conda = "envs/bcftools.yaml"
 
+# ---- upstream rule: bcf_index (fixed candidate calls) ----------------------
+# utils.smk generic bcf_index instances for the FIXED calls. The index is
+# declared (as upstream) so the fixed calls are indexable downstream of the
+# offtarget-filter step (target-regions path only).
+[[rules]]
+name = "bcf_index_candidate_freebayes"
+description = "Index the fixed freebayes candidates (bcftools index)"
+when = "config.target_regions != \"\""
+input = ["results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.bcf"]
+output = ["results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/candidate-calls/freebayes/SRR702070_group/SRR702070_group.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+[[rules]]
+name = "bcf_index_candidate_delly"
+description = "Index the fixed delly candidates (bcftools index)"
+when = "config.target_regions != \"\""
+input = ["results/candidate-calls/delly/SRR702070_group/SRR702070_group.no_bnds.bcf"]
+output = ["results/candidate-calls/delly/SRR702070_group/SRR702070_group.no_bnds.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/candidate-calls/delly/SRR702070_group/SRR702070_group.no_bnds.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: filter_offtarget_variants (freebayes) ------------------
+# Upstream pins wrapper v2.3.2/bio/bcftools/filter with params.extra="" — the
+# wrapper consumes only input[0], so this is a pass-through filter (verified
+# against the wrapper source). The regions=... and index inputs are declared
+# (as upstream) so get_target_regions and the candidate indexes are guaranteed
+# to exist before scatter_candidates; the actual target-region restriction
+# happens in regions.oxoflow filter_group_regions_* (bedtools intersect, as
+# upstream regions.smk).
+[[rules]]
+name = "filter_offtarget_variants_freebayes"
+description = "Pass-through filter of the fixed freebayes candidates (upstream wrapper v2.3.2/bio/bcftools/filter, extra=\"\")"
+when = "config.target_regions != \"\""
+input = [
+    "results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.bcf",
+    "results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.bcf.csi",
+    "resources/target_regions/target_regions.bed",
+]
+output = ["results/candidate-calls/freebayes/filtered/SRR702070_group/SRR702070_group.bcf"]
+shell = "bcftools filter --output {output} --output-type b {input[0]} 2> {log}"
+log = "logs/filter_offtarget_variants/SRR702070_group/SRR702070_group.freebayes.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+[[rules]]
+name = "filter_offtarget_variants_delly"
+description = "Pass-through filter of the fixed delly candidates (upstream wrapper v2.3.2/bio/bcftools/filter, extra=\"\")"
+when = "config.target_regions != \"\""
+input = [
+    "results/candidate-calls/delly/SRR702070_group/SRR702070_group.no_bnds.bcf",
+    "results/candidate-calls/delly/SRR702070_group/SRR702070_group.no_bnds.bcf.csi",
+    "resources/target_regions/target_regions.bed",
+]
+output = ["results/candidate-calls/delly/filtered/SRR702070_group/SRR702070_group.bcf"]
+shell = "bcftools filter --output {output} --output-type b {input[0]} 2> {log}"
+log = "logs/filter_offtarget_variants/SRR702070_group/SRR702070_group.delly.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
 # ---- upstream rule: scatter_candidates (freebayes) -------------------------
 # rbt vcf-split with a single output chunk (upstream scatter.calling(16)
 # collapsed to scatteritem=0; command is byte-identical).
 [[rules]]
 name = "scatter_candidates_freebayes"
-description = "Split candidate VCF into calling chunks with rbt vcf-split (1 chunk)"
-input = ["results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.bcf"]
+description = "Split candidate VCF into calling chunks with rbt vcf-split (1 chunk; offtarget-filtered input under target regions, as upstream)"
+input = [
+    "results/candidate-calls/freebayes/filtered/SRR702070_group/SRR702070_group.bcf",
+    "results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.bcf",
+]
 output = ["results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.0.bcf"]
-shell = "rbt vcf-split {input} {output} 2> {log}"
+optional = "any"
+shell = """
+infile=results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.bcf
+if [ -n "{config.target_regions}" ]; then
+    infile=results/candidate-calls/freebayes/filtered/SRR702070_group/SRR702070_group.bcf
+fi
+rbt vcf-split "$infile" {output} 2> {log}
+"""
 log = "logs/scatter-candidates/freebayes/SRR702070_group/SRR702070_group.log"
 
 [rules.environment]
@@ -118,10 +200,20 @@ conda = "envs/rbt.yaml"
 # ---- upstream rule: scatter_candidates (delly) -----------------------------
 [[rules]]
 name = "scatter_candidates_delly"
-description = "Split candidate VCF into calling chunks with rbt vcf-split (1 chunk)"
-input = ["results/candidate-calls/delly/SRR702070_group/SRR702070_group.no_bnds.bcf"]
+description = "Split candidate VCF into calling chunks with rbt vcf-split (1 chunk; offtarget-filtered input under target regions, as upstream)"
+input = [
+    "results/candidate-calls/delly/filtered/SRR702070_group/SRR702070_group.bcf",
+    "results/candidate-calls/delly/SRR702070_group/SRR702070_group.no_bnds.bcf",
+]
 output = ["results/candidate-calls/delly/SRR702070_group/SRR702070_group.0.bcf"]
-shell = "rbt vcf-split {input} {output} 2> {log}"
+optional = "any"
+shell = """
+infile=results/candidate-calls/delly/SRR702070_group/SRR702070_group.no_bnds.bcf
+if [ -n "{config.target_regions}" ]; then
+    infile=results/candidate-calls/delly/filtered/SRR702070_group/SRR702070_group.bcf
+fi
+rbt vcf-split "$infile" {output} 2> {log}
+"""
 log = "logs/scatter-candidates/delly/SRR702070_group/SRR702070_group.log"
 
 [rules.environment]
