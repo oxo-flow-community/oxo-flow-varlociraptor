@@ -122,8 +122,17 @@ markduplicates_extra = ""
 
 # upstream config: fusion calling branch (fusion_calling.smk star_arriba
 # meta wrapper: star_index / star_align / arriba / annotate_exons /
-# convert_fusions / sort_arriba_calls / bcftools_concat_candidates).
+# convert_fusions / sort_arriba_calls / bcftools_concat_candidates). With a
+# group whose `calling` metadata includes "fusions", the candidates continue
+# into the varlociraptor calling flow (calling.smk get_candidate_calls —
+# see modules/calling.oxoflow).
 fusion_activate = false
+
+# upstream config: target_regions (regions.smk get_target_regions +
+# candidate_calling.smk filter_offtarget_variants, see module headers). One
+# BED path; empty (default) = whole-genome calling exactly as today. Upstream
+# accepts one or more files (merged); the port freezes a single path.
+target_regions = ""
 
 # ---------------------------------------------------------------------------
 # Sample groups (upstream config/samples.tsv: SRR702070 -> SRR702070_group,
@@ -132,6 +141,15 @@ fusion_activate = false
 [[sample_groups]]
 name = "SRR702070_group"
 samples = ["SRR702070"]
+
+# upstream config/samples.tsv "calling" column (variants | fusions |
+# variants,fusions). The default row is "variants"; a group whose mode
+# includes "fusions" re-wires the calling flow to consume the arriba
+# candidates (calling.smk get_candidate_calls — see modules/calling.oxoflow)
+# and additionally requires fusion_activate = true so the fusion candidates
+# exist.
+[sample_groups.metadata]
+calling = "variants"
 
 # ---------------------------------------------------------------------------
 # Modules (rule names are namespaced as <namespace>::<rule_name>)

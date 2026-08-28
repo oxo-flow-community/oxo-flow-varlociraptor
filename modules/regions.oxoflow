@@ -7,9 +7,12 @@
 #   merge_covered_group_regions -> regions::merge_covered_group_regions
 #   filter_group_regions        -> regions::filter_group_regions_{expanded,covered}
 #                                  (regions_type wildcard frozen to both values)
+#   get_target_regions          -> regions::get_target_regions (config-gated)
 #   download_delly_excluded_regions -> regions::download_delly_excluded_regions
 #
-# get_target_regions is not in the default path (no target_regions in config).
+# get_target_regions is off by default (target_regions empty in config) — as
+# upstream. With target_regions set it merges/chr-strips the configured BED,
+# and filter_group_regions_{expanded,covered} intersect it (get_filter_targets).
 
 [workflow]
 name = "regions"
@@ -64,6 +67,28 @@ log = "logs/regions/SRR702070_group_covered_regions.log"
 [rules.environment]
 conda = "envs/bedtools.yaml"
 
+# ---- upstream rule: get_target_regions -------------------------------------
+# Config-level targets (upstream config.get("target_regions", []) - one or
+# more BED files merged into one; the port freezes a single path). Empty
+# config value skips the rule in the plan (whole-genome calling, unchanged default).
+[[rules]]
+name = "get_target_regions"
+description = "Merge and chr-strip the configured target regions (mergeBed)"
+when = "config.target_regions != \"\""
+input = ["{config.target_regions}"]
+output = ["resources/target_regions/target_regions.bed"]
+shell = """
+(cat {input[0]} | sort -k1,1 -k2,2n - | mergeBed -i - | awk '{sub(\"^chr\",\"\", $0); print}' > {output} \
+    && if [[ ! -s {output} ]]; then
+        >&2 echo 'Empty output: target file appears to be invalid'
+        exit 1
+    fi) 2> {log}
+"""
+log = "logs/regions/target_regions.log"
+
+[rules.environment]
+conda = "envs/awk_bedtools.yaml"
+
 # ---- upstream rule: filter_group_regions (expanded) ------------------------
 # n_chromosomes = 25 (first 25 FASTA entries, i.e. chr1-22 + X + Y + MT).
 [[rules]]
@@ -72,10 +97,16 @@ description = "Restrict expanded regions to the 25 reference chromosomes"
 input = [
     "results/regions/SRR702070_group.expanded_regions.bed",
     "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+    "resources/target_regions/target_regions.bed",
 ]
 output = ["results/regions/SRR702070_group.expanded_regions.filtered.bed"]
+optional = "any"
 shell = """
-cat {input[0]} | grep -f <(head -n 25 {input[1]} | awk '{print "^"$1"\\t"}') | sort -k1,1 -k2,2n > {output} 2> {log}
+if [ -n "{config.target_regions}" ]; then
+    cat {input[0]} | grep -f <(head -n 25 {input[1]} | awk '{print "^"$1"\\t"}') | bedtools intersect -a /dev/stdin -b resources/target_regions/target_regions.bed | sort -k1,1 -k2,2n > {output} 2> {log}
+else
+    cat {input[0]} | grep -f <(head -n 25 {input[1]} | awk '{print "^"$1"\\t"}') | sort -k1,1 -k2,2n > {output} 2> {log}
+fi
 """
 log = "logs/regions/SRR702070_group.expanded_regions.filtered.log"
 
@@ -89,10 +120,16 @@ description = "Restrict covered regions to the 25 reference chromosomes"
 input = [
     "results/regions/SRR702070_group.covered_regions.bed",
     "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+    "resources/target_regions/target_regions.bed",
 ]
 output = ["results/regions/SRR702070_group.covered_regions.filtered.bed"]
+optional = "any"
 shell = """
-cat {input[0]} | grep -f <(head -n 25 {input[1]} | awk '{print "^"$1"\\t"}') | sort -k1,1 -k2,2n > {output} 2> {log}
+if [ -n "{config.target_regions}" ]; then
+    cat {input[0]} | grep -f <(head -n 25 {input[1]} | awk '{print "^"$1"\\t"}') | bedtools intersect -a /dev/stdin -b resources/target_regions/target_regions.bed | sort -k1,1 -k2,2n > {output} 2> {log}
+else
+    cat {input[0]} | grep -f <(head -n 25 {input[1]} | awk '{print "^"$1"\\t"}') | sort -k1,1 -k2,2n > {output} 2> {log}
+fi
 """
 log = "logs/regions/SRR702070_group.covered_regions.filtered.log"
 

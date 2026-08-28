@@ -1,0 +1,4 @@
+# oxo-flow run artifacts (never tracked)
+.oxo-flow/
+logs/
+results/

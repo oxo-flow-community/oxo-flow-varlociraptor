@@ -8,7 +8,9 @@
 #   sort_calls                -> calling::sort_calls_{freebayes,delly}
 #                                (bcftools sort v2.6.0 wrapper, mem 8000)
 #   bcftools_concat           -> calling::bcftools_concat
+#                                (fusions mode: calling::bcftools_concat_fusions)
 #   bcf_index                 -> calling::bcf_index_{freebayes,delly}
+#                                (fusions mode: calling::bcf_index_arriba)
 #
 # Deviations (details in README.md):
 #   * render_scenario uses yte upstream; the port copies a pre-rendered
@@ -17,6 +19,19 @@
 #   * infer_genotypes is false as in the default config, so the call command
 #     writes the raw posterior probabilities ("generic" subcommand).
 #   * scatteritem wildcard frozen to 0 (scatter.calling(16) collapsed).
+#   * A group whose `calling` metadata includes "fusions" re-wires the
+#     calling flow to the arriba candidates (upstream get_candidate_calls for
+#     caller=arriba consumes the UNFILTERED group concat
+#     results/candidate-calls/arriba/{group}/{group}.bcf) with the arriba
+#     extra --propagate-info-fields GENE_NAME GENE_ID EXON_NUMBER
+#     (get_varlociraptor_params). The port gates the continuation on the
+#     group's `calling` metadata alone (plan-time pruning, exactly as
+#     upstream get_calling_groups); with calling=fusions but
+#     fusion_activate=false the candidates never exist and the continuation
+#     rules surface as unproducible (input ✗) in the plan. The fusions
+#     callset results/calls/varlociraptor/{group}/{group}.fusions.0.bcf is
+#     the endpoint here: the fusions FDR-control chain (filtering.smk,
+#     BND-only vartypes) remains out of scope, see metadata.json.
 
 [workflow]
 name = "calling"
@@ -203,6 +218,104 @@ input = [
 output = ["results/calls/varlociraptor/SRR702070_group/SRR702070_group.variants.0.bcf"]
 shell = "bcftools concat --output {output} --output-type b -a {input[0]} {input[1]} 2> {log}"
 log = "logs/concat-calls/SRR702070_group/SRR702070_group.variants.0.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: varlociraptor_preprocess (arriba, fusions mode) --------
+# get_candidate_calls for caller=arriba returns the UNFILTERED group concat
+# (no scatteritem); get_varlociraptor_params appends the arriba
+# propagate-info-fields extra. Paths carry the {group}/{sample} wildcards
+# (upstream layout) so the when-pruning fans out per group at plan time.
+[[rules]]
+name = "varlociraptor_preprocess_arriba"
+description = "Preprocess observations from arriba fusion candidates (--propagate-info-fields GENE_NAME GENE_ID EXON_NUMBER)"
+when = "wildcard.calling == \"fusions\" || wildcard.calling == \"variants,fusions\""
+input = [
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+    "results/candidate-calls/arriba/{group}/{group}.bcf",
+    "results/recal/{sample}.bam",
+    "results/recal/{sample}.bai",
+    "results/alignment-properties/{group}/{sample}.json",
+]
+output = ["results/observations/arriba/{group}/{sample}.0.bcf"]
+shell = """
+varlociraptor preprocess variants --candidates {input[2]} --max-depth 200 \
+  --propagate-info-fields GENE_NAME GENE_ID EXON_NUMBER \
+  --alignment-properties {input[5]} {input[0]} --bam {input[3]} --output {output} 2> {log}
+"""
+log = "logs/varlociraptor/preprocess/{group}/{sample}.arriba.0.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+# ---- upstream rule: varlociraptor_call (arriba, fusions mode) --------------
+[[rules]]
+name = "varlociraptor_call_arriba"
+description = "Call fusions with Varlociraptor from arriba observations"
+when = "wildcard.calling == \"fusions\" || wildcard.calling == \"variants,fusions\""
+input = [
+    "results/observations/arriba/{group}/{sample}.0.bcf",
+    "results/scenarios/{group}.yaml",
+]
+output = ["results/calls/varlociraptor/arriba/{group}/{group}.0.unsorted.bcf"]
+shell = """
+(varlociraptor call variants --propagate-info-fields GENE_NAME GENE_ID EXON_NUMBER -o /dev/stdout generic \
+  --obs tumor=results/observations/arriba/{group}/{sample}.0.bcf \
+  --scenario {input[1]} > {output}) 2> {log}
+"""
+log = "logs/varlociraptor/call/arriba/{group}/{group}.0.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+# ---- upstream rule: sort_calls (arriba, fusions mode) ----------------------
+[[rules]]
+name = "sort_calls_arriba"
+description = "Coordinate-sort the arriba calls (bcftools sort v2.6.0 wrapper)"
+when = "wildcard.calling == \"fusions\" || wildcard.calling == \"variants,fusions\""
+input = ["results/calls/varlociraptor/arriba/{group}/{group}.0.unsorted.bcf"]
+output = ["results/calls/varlociraptor/arriba/{group}/{group}.0.bcf"]
+shell = """
+tmpdir=$(mktemp -d) && \
+bcftools sort --output {output} --output-type b --max-mem 8000M --temp-dir "$tmpdir" {input} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/bcf-sort/{group}/{group}.arriba.0.log"
+
+[rules.resources]
+memory = "8G"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: bcf_index (arriba calls, fusions mode) -----------------
+[[rules]]
+name = "bcf_index_arriba"
+description = "Index the sorted arriba calls (bcftools index)"
+when = "wildcard.calling == \"fusions\" || wildcard.calling == \"variants,fusions\""
+input = ["results/calls/varlociraptor/arriba/{group}/{group}.0.bcf"]
+output = ["results/calls/varlociraptor/arriba/{group}/{group}.0.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/calls/varlociraptor/arriba.{group}.0.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: bcftools_concat (fusions mode) -------------------------
+# get_scattered_calls for calling_type=fusions resolves the caller to arriba.
+[[rules]]
+name = "bcftools_concat_fusions"
+description = "Merge the arriba calls into the fusions callset (bcftools concat v2.3.2 wrapper, -a)"
+when = "wildcard.calling == \"fusions\" || wildcard.calling == \"variants,fusions\""
+input = [
+    "results/calls/varlociraptor/arriba/{group}/{group}.0.bcf",
+    "results/calls/varlociraptor/arriba/{group}/{group}.0.bcf.csi",
+]
+output = ["results/calls/varlociraptor/{group}/{group}.fusions.0.bcf"]
+shell = "bcftools concat --output {output} --output-type b -a {input[0]} 2> {log}"
+log = "logs/concat-calls/{group}/{group}.fusions.0.log"
 
 [rules.environment]
 conda = "envs/bcftools.yaml"

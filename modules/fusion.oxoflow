@@ -34,10 +34,11 @@
 #     discarded exactly as upstream.
 #   * Environment: star_index and star_align pin envs/star.yaml (star
 #     2.7.11b, from the v8.0.0 bio/star/align wrapper environment.yaml).
-#   * The candidate-calls BCF is the endpoint of the fusion branch: upstream
-#     the arriba candidates continue into the varlociraptor calling flow
-#     (calling.smk get_candidate_calls), which the port does not re-wire for
-#     arriba (the default candidate path is delly/freebayes only).
+#   * The group-concat candidate BCF is the endpoint of this module: with the
+#     group's `calling` metadata including "fusions" (and fusion_activate
+#     true) the candidates continue into the varlociraptor calling flow
+#     exactly as upstream (calling.smk get_candidate_calls for caller=arriba
+#     consumes this unfiltered group concat — see modules/calling.oxoflow).
 
 [workflow]
 name = "fusion"
