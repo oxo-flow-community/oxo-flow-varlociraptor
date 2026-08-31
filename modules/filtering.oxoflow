@@ -4,9 +4,16 @@
 #   filter_by_annotation -> filtering::filter_by_annotation
 #   gather_calls         -> filtering::gather_calls        (bcftools concat v2.3.2 wrapper)
 #   control_fdr          -> filtering::control_fdr_{SNV,INS,DEL,MNV,BND,INV,DUP,REP}
+#                           (fusions calling_type: filtering::control_fdr_BND_fusions)
 #   merge_calls          -> filtering::merge_calls         (bcftools concat v2.3.2 wrapper)
+#                           (fusions calling_type: filtering::merge_calls_fusions)
 #   convert_phred_scores -> filtering::convert_phred_scores
-#   bcf_index            -> filtering::bcf_index_{filtered,fdr}
+#                           (fusions calling_type: filtering::convert_phred_scores_fusions)
+#   bcf_index            -> filtering::bcf_index_{filtered,fdr_*}
+#                           (fusions callset idx: filtering::bcf_index_fusions_callset +
+#                            filtering::bcf_index_fdr_BND_fusions)
+#   gather_annotated_calls (annotation.smk, fusions selection "varlociraptor")
+#                        -> filtering::gather_annotated_calls_fusions
 #
 # Deviations (details in README.md):
 #   * filter_odds is not in the default path: mode local-smart and a filter
@@ -21,6 +28,20 @@
 #     config.annotation_selection (upstream get_annotated_bcf ->
 #     get_final_selected_annotation): "db_annotated" by default,
 #     "dgidb_annotated" when dgidb is activated.
+#   * The fusions calling_type branch (upstream: the same filtering.smk rules
+#     instantiated with calling_type=fusions; only vartype BND exists there —
+#     fusions vartype list is ["BND"]) is appended as separate rules gated on
+#     the group's `calling` metadata:
+#     `wildcard.calling == "fusions" || wildcard.calling == "variants,fusions"`
+#     (same gate as the calling.oxoflow continuation rules). Per upstream
+#     get_control_fdr_input, the fusions branch bypasses the annotation filter
+#     (the filtered_ann fallback requires calling_type == "variants") and
+#     consumes the raw fusions callset gathered as
+#     results/final-calls/{group}/{group}.fusions.annotated.bcf
+#     (get_gather_annotated_calls_input selection "varlociraptor"); the
+#     pre-existing fusions callset index is produced here because
+#     calling::bcftools_concat_fusions emits the .bcf only. Outputs carry the
+#     {group} wildcard and match maf::group_bcf_to_vcf_fusions' input path.
 
 [workflow]
 name = "filtering"
@@ -325,3 +346,106 @@ log = "logs/bcf-index/fdr-controlled/SRR702070_group/some_id/SRR702070_group.REP
 
 [rules.environment]
 conda = "envs/bcftools.yaml"
+
+# ===========================================================================
+# fusions calling_type (upstream filtering.smk instantiated for
+# calling_type=fusions; BND is the only vartype there). Every rule is gated
+# on the group's `calling` metadata, exactly as the calling.oxoflow
+# continuation rules; with the default calling="variants" all six classify
+# SkippedByWhen in the plan and nothing changes.
+# ===========================================================================
+
+# ---- upstream rule: bcf_index (fusions callset) -----------------------------
+# calling::bcftools_concat_fusions emits the .bcf only; upstream declares the
+# csi via bcf_index (ruleorder annotated_index > bcf_index).
+[[rules]]
+name = "bcf_index_fusions_callset"
+description = "Index the fusions callset (bcftools index v2.6.0 wrapper)"
+when = "wildcard.calling == \"fusions\" || wildcard.calling == \"variants,fusions\""
+input = ["results/calls/varlociraptor/{group}/{group}.fusions.0.bcf"]
+output = ["results/calls/varlociraptor/{group}/{group}.fusions.0.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/varlociraptor/{group}/{group}.fusions.0.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: gather_annotated_calls (annotation.smk, fusions) --------
+# get_gather_annotated_calls_input for calling_type=fusions selects the raw
+# "varlociraptor" callset (the annotation filter applies to variants only).
+[[rules]]
+name = "gather_annotated_calls_fusions"
+description = "Gather the fusions callset into the final-calls layout (bcftools concat v2.3.2 wrapper)"
+when = "wildcard.calling == \"fusions\" || wildcard.calling == \"variants,fusions\""
+input = [
+    "results/calls/varlociraptor/{group}/{group}.fusions.0.bcf",
+    "results/calls/varlociraptor/{group}/{group}.fusions.0.bcf.csi",
+]
+output = ["results/final-calls/{group}/{group}.fusions.annotated.bcf"]
+shell = "bcftools concat --output {output} --output-type b -a {input[0]} 2> {log}"
+log = "logs/gather-annotated-calls/{group}/{group}.fusions.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: control_fdr (fusions, BND) ------------------------------
+# input bypasses the annotation filter (upstream get_control_fdr_input: the
+# filtered_ann branch requires calling_type == "variants").
+[[rules]]
+name = "control_fdr_BND_fusions"
+description = "FDR control for fusions breakends (varlociraptor control-fdr, local-smart, fdr 0.05)"
+when = "wildcard.calling == \"fusions\" || wildcard.calling == \"variants,fusions\""
+input = ["results/final-calls/{group}/{group}.fusions.annotated.bcf"]
+output = ["results/calls/fdr-controlled/{group}/some_id/{group}.BND.fusions.bcf"]
+shell = """
+varlociraptor filter-calls control-fdr {input} --mode local-smart --var BND \
+  --events present somatic_tumor_high somatic_tumor_medium --fdr 0.05 > {output} 2> {log}
+"""
+log = "logs/control-fdr/{group}/some_id/{group}.BND.fusions.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+# ---- upstream rule: bcf_index (fdr-controlled fusions BND calls) ------------
+[[rules]]
+name = "bcf_index_fdr_BND_fusions"
+description = "Index the FDR-controlled fusions BND calls (bcftools index v2.6.0 wrapper)"
+when = "wildcard.calling == \"fusions\" || wildcard.calling == \"variants,fusions\""
+input = ["results/calls/fdr-controlled/{group}/some_id/{group}.BND.fusions.bcf"]
+output = ["results/calls/fdr-controlled/{group}/some_id/{group}.BND.fusions.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/fdr-controlled/{group}/some_id/{group}.BND.fusions.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: merge_calls (fusions) -----------------------------------
+# bcftools concat v2.3.2 wrapper (-a) over the BND-only fusions callset;
+# output path matches maf::group_bcf_to_vcf_fusions' input.
+[[rules]]
+name = "merge_calls_fusions"
+description = "Merge FDR-controlled fusions calls (bcftools concat v2.3.2 wrapper)"
+when = "wildcard.calling == \"fusions\" || wildcard.calling == \"variants,fusions\""
+input = [
+    "results/calls/fdr-controlled/{group}/some_id/{group}.BND.fusions.bcf",
+    "results/calls/fdr-controlled/{group}/some_id/{group}.BND.fusions.bcf.csi",
+]
+output = ["results/final-calls/{group}/{group}.some_id.fusions.fdr-controlled.bcf"]
+shell = "bcftools concat --output {output} --output-type b -a {input[0]} 2> {log}"
+log = "logs/merge-calls/{group}/{group}.some_id.fusions.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: convert_phred_scores (fusions) --------------------------
+[[rules]]
+name = "convert_phred_scores_fusions"
+description = "Decode phred scores to normal probabilities for the fusions callset (varlociraptor decode-phred)"
+when = "wildcard.calling == \"fusions\" || wildcard.calling == \"variants,fusions\""
+input = ["results/final-calls/{group}/{group}.some_id.fusions.fdr-controlled.bcf"]
+output = ["results/final-calls/{group}/{group}.some_id.fusions.fdr-controlled.normal-probs.bcf"]
+shell = "varlociraptor decode-phred < {input} > {output} 2> {log}"
+log = "logs/convert-phred-scores/{group}.some_id.fusions.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
