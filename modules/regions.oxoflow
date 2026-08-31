@@ -69,16 +69,18 @@ conda = "envs/bedtools.yaml"
 
 # ---- upstream rule: get_target_regions -------------------------------------
 # Config-level targets (upstream config.get("target_regions", []) - one or
-# more BED files merged into one; the port freezes a single path). Empty
-# config value skips the rule in the plan (whole-genome calling, unchanged default).
+# more BED files merged into one; `config.target_regions` accepts either a
+# single path string or a list of paths, both gated with
+# len(config.target_regions) > 0 which is false for "" / [] / absent).
+# Empty config value skips the rule in the plan (whole-genome calling, unchanged default).
 [[rules]]
 name = "get_target_regions"
-description = "Merge and chr-strip the configured target regions (mergeBed)"
-when = "config.target_regions != \"\""
+description = "Merge and chr-strip one or more configured target-region BED files (mergeBed)"
+when = "len(config.target_regions) > 0"
 input = ["{config.target_regions}"]
 output = ["resources/target_regions/target_regions.bed"]
 shell = """
-(cat {input[0]} | sort -k1,1 -k2,2n - | mergeBed -i - | awk '{sub(\"^chr\",\"\", $0); print}' > {output} \
+(cat {input} | sort -k1,1 -k2,2n - | mergeBed -i - | awk '{sub(\"^chr\",\"\", $0); print}' > {output} \
     && if [[ ! -s {output} ]]; then
         >&2 echo 'Empty output: target file appears to be invalid'
         exit 1
