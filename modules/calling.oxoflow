@@ -10,7 +10,9 @@
 #   bcftools_concat           -> calling::bcftools_concat
 #                                (fusions mode: calling::bcftools_concat_fusions)
 #   bcf_index                 -> calling::bcf_index_{freebayes,delly}
-#                                (fusions mode: calling::bcf_index_arriba)
+#                                (fusions mode: calling::bcf_index_arriba;
+#                                the fusions callset csi is produced by
+#                                filtering::bcf_index_fusions_callset)
 #
 # Deviations (details in README.md):
 #   * render_scenario uses yte upstream; the port copies a pre-rendered
@@ -19,6 +21,9 @@
 #   * infer_genotypes is false as in the default config, so the call command
 #     writes the raw posterior probabilities ("generic" subcommand).
 #   * scatteritem wildcard frozen to 0 (scatter.calling(16) collapsed).
+#   * bcf_index for the fusions callset lives in filtering.oxoflow
+#     (filtering::bcf_index_fusions_callset) together with the fusions
+#     FDR-control chain it feeds.
 #   * A group whose `calling` metadata includes "fusions" re-wires the
 #     calling flow to the arriba candidates (upstream get_candidate_calls for
 #     caller=arriba consumes the UNFILTERED group concat
@@ -29,9 +34,10 @@
 #     upstream get_calling_groups); with calling=fusions but
 #     fusion_activate=false the candidates never exist and the continuation
 #     rules surface as unproducible (input ✗) in the plan. The fusions
-#     callset results/calls/varlociraptor/{group}/{group}.fusions.0.bcf is
-#     the endpoint here: the fusions FDR-control chain (filtering.smk,
-#     BND-only vartypes) remains out of scope, see metadata.json.
+#     callset results/calls/varlociraptor/{group}/{group}.fusions.0.bcf feeds
+#     the gated fusions FDR-control chain ported in filtering.oxoflow
+#     (filtering::gather_annotated_calls_fusions ... ::convert_phred_scores_fusions,
+#     BND-only vartypes, see metadata.json).
 
 [workflow]
 name = "calling"
