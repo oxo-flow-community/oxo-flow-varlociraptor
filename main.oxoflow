@@ -130,8 +130,12 @@ fusion_activate = false
 
 # upstream config: target_regions (regions.smk get_target_regions +
 # candidate_calling.smk filter_offtarget_variants, see module headers). One
-# BED path; empty (default) = whole-genome calling exactly as today. Upstream
-# accepts one or more files (merged); the port freezes a single path.
+# BED path or a list of BED paths (all merged + chr-stripped by
+# regions::get_target_regions); empty (default) = whole-genome calling
+# exactly as today. Gate is len(config.target_regions) > 0, so "" and []
+# both disable. Note: CLI overrides are single-valued strings
+# (--arg target_regions=path or --target-regions=path) — pass a list in
+# main.oxoflow itself for multiple files.
 target_regions = ""
 
 # ---------------------------------------------------------------------------

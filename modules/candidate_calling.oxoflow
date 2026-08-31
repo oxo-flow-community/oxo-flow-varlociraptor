@@ -112,7 +112,7 @@ conda = "envs/bcftools.yaml"
 [[rules]]
 name = "bcf_index_candidate_freebayes"
 description = "Index the fixed freebayes candidates (bcftools index)"
-when = "config.target_regions != \"\""
+when = "len(config.target_regions) > 0"
 input = ["results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.bcf"]
 output = ["results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.bcf.csi"]
 shell = "bcftools index {input} 2> {log}"
@@ -124,7 +124,7 @@ conda = "envs/bcftools.yaml"
 [[rules]]
 name = "bcf_index_candidate_delly"
 description = "Index the fixed delly candidates (bcftools index)"
-when = "config.target_regions != \"\""
+when = "len(config.target_regions) > 0"
 input = ["results/candidate-calls/delly/SRR702070_group/SRR702070_group.no_bnds.bcf"]
 output = ["results/candidate-calls/delly/SRR702070_group/SRR702070_group.no_bnds.bcf.csi"]
 shell = "bcftools index {input} 2> {log}"
@@ -144,7 +144,7 @@ conda = "envs/bcftools.yaml"
 [[rules]]
 name = "filter_offtarget_variants_freebayes"
 description = "Pass-through filter of the fixed freebayes candidates (upstream wrapper v2.3.2/bio/bcftools/filter, extra=\"\")"
-when = "config.target_regions != \"\""
+when = "len(config.target_regions) > 0"
 input = [
     "results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.bcf",
     "results/candidate-calls/freebayes/SRR702070_group/SRR702070_group.bcf.csi",
@@ -160,7 +160,7 @@ conda = "envs/bcftools.yaml"
 [[rules]]
 name = "filter_offtarget_variants_delly"
 description = "Pass-through filter of the fixed delly candidates (upstream wrapper v2.3.2/bio/bcftools/filter, extra=\"\")"
-when = "config.target_regions != \"\""
+when = "len(config.target_regions) > 0"
 input = [
     "results/candidate-calls/delly/SRR702070_group/SRR702070_group.no_bnds.bcf",
     "results/candidate-calls/delly/SRR702070_group/SRR702070_group.no_bnds.bcf.csi",
