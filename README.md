@@ -68,6 +68,14 @@ cd oxo-flow-varlociraptor
 - **Tools** — conda environments with pinned versions, one env per tool pin
   set under `envs/` (declared per rule via `[rules.environment]` in the
   module files). No containers are used; conda/mamba is required at runtime.
+- **Reproducibility caveat** — the delly excluded-regions BED
+  (`results/regions/human.hg38.delly_excluded.bed`,
+  `regions::download_delly_excluded_regions`) is fetched at runtime from
+  delly's `main` branch
+  (`raw.githubusercontent.com/dellytools/delly/main/excludeTemplates/human.hg38.excl.tsv`,
+  with a `ghfast.top` mirror fallback), so its content can change upstream
+  without a pinned version. Re-run reproducibility of the delly candidate
+  step therefore depends on that upstream file.
 - **Disk** — the reference downloads under `resources/` are large (pangenome
   graph, VEP cache, known-variants VCFs), and `results/` grows with BAMs,
   BCFs, tables and reports.
