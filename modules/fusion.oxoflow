@@ -9,7 +9,7 @@
 #   convert_fusions          -> fusion::convert_fusions           (convert_fusions_to_vcf.sh)
 #   sort_arriba_calls        -> fusion::sort_arriba_calls         (bcftools sort v1.21.0 wrapper)
 #   bcftools_concat_candidates -> fusion::bcftools_concat_candidates (bcftools concat v1.21.0 wrapper)
-#   bcf_index                -> fusion::bcf_index_arriba          (utils.smk instance)
+#   bcf_index                -> fusion::bcf_index_arriba_candidates (utils.smk instance)
 #
 # Deviations (details in README.md):
 #   * The sample wildcard freezes to SRR702070; the group wildcard of
@@ -201,8 +201,12 @@ log = "logs/bcf-sort/SRR702070/SRR702070.log"
 conda = "envs/bcftools.yaml"
 
 # ---- upstream rule: bcf_index (sorted arriba calls) -------------------------
+# Renamed bcf_index_arriba -> bcf_index_arriba_candidates: calling.oxoflow
+# already defines a bcf_index_arriba for the calls/... fusion-mode path, and
+# duplicate rule names collapse in the engine (this candidate-instance was
+# invisible in dry-run).
 [[rules]]
-name = "bcf_index_arriba"
+name = "bcf_index_arriba_candidates"
 description = "Index the sorted fusion candidates (bcftools index)"
 when = "config.fusion_activate"
 input = ["results/candidate-calls/arriba/SRR702070/SRR702070.bcf"]

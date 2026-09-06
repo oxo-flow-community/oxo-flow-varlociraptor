@@ -10,7 +10,7 @@
 #   bcftools_concat           -> calling::bcftools_concat
 #                                (fusions mode: calling::bcftools_concat_fusions)
 #   bcf_index                 -> calling::bcf_index_{freebayes,delly}
-#                                (fusions mode: calling::bcf_index_arriba;
+#                                (fusions mode: calling::bcf_index_arriba; candidates path: fusion::bcf_index_arriba_candidates;
 #                                the fusions callset csi is produced by
 #                                filtering::bcf_index_fusions_callset)
 #
