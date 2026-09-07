@@ -7,11 +7,21 @@
 #   map_reads_vg               -> mapping::map_reads_vg      (vg giraffe v9.9.0 wrapper)
 #   postprocess_vg_alignments  -> mapping::postprocess_vg_alignments
 #   sort_alignments            -> mapping::sort_alignments   (samtools sort v9.15.0 wrapper)
-#   mark_duplicates            -> mapping::mark_duplicates   (picard markduplicates v2.5.0 wrapper)
-#   bam_index                  -> mapping::bam_index_dedup   (samtools index v9.15.0 wrapper)
-#   recalibrate_base_qualities -> mapping::recalibrate_base_qualities
-#                                 (gatk baserecalibratorspark v1.25.0 wrapper)
-#   apply_bqsr                 -> mapping::apply_bqsr        (gatk applybqsr v2.3.2 wrapper)
+#   bam_index                  -> mapping::bam_index_sorted  (samtools index v9.15.0 wrapper;
+#                                 feeds the UMI branch input, like upstream)
+#   annotate_umis              -> mapping::annotate_umis     (umi_tools group, gated on
+#                                 config.umi_read; output is snakemake temp())
+#   mark_duplicates            -> mapping::mark_duplicates            (no UMI reads)
+#                                 mapping::mark_duplicates_umi        (--BARCODE_TAG BX twin;
+#                                 upstream get_markduplicates_input + get_markduplicates_extra)
+#   splitncigarreads           -> mapping::splitncigarreads  (gatk wrapper v3.1.0, gated on
+#                                 config.datatype == "rna"; output is snakemake temp())
+#   bam_index                  -> mapping::bam_index_split   (results/split/{sample}.bai;
+#                                 no ruleorder claim upstream, generic bam_index)
+#   recalibrate_base_qualities -> mapping::recalibrate_base_qualities[_rna]
+#                                 (three-way gate with consensus::recalibrate_base_qualities_consensus,
+#                                 mirroring upstream get_recalibrate_quality_input)
+#   apply_bqsr                 -> mapping::apply_bqsr[_rna]  (same three-way gate)
 #
 # Deviations (details in README.md):
 #   * Fastq input paths come from config.reads_dir (upstream config/units.tsv
@@ -20,6 +30,12 @@
 #   * Read group is rendered with literal backslashes exactly as upstream.
 #   * apply_bqsr declares results/recal/{sample}.bam as protected_output
 #     (upstream `protected()`).
+#   * Upstream switches the mark_duplicates input/extra and the BQSR input via
+#     get_markduplicates_input/get_markduplicates_extra/get_recalibrate_quality_input;
+#     the port models each branch as duplicate rules with the same outputs and
+#     mutually exclusive `when` gates. The sorted/split BAM indexes are declared
+#     by dedicated bam_index_* rules (upstream: generic bam_index with ruleorder
+#     only where ApplyBQSR writes its own .bai).
 
 [workflow]
 name = "mapping"
@@ -113,15 +129,60 @@ memory = "32G"
 [rules.environment]
 conda = "envs/samtools.yaml"
 
+# ---- upstream rule: bam_index (sorted bam) ---------------------------------
+# samtools index v9.15.0 wrapper. Upstream `bam_index` has no ruleorder claim
+# on the sorted BAM, so annotate_umis (UMI branch) consumes a declared index
+# here; the default path does not need it (dedup/split have their own rules).
+# Gated like its only consumer (annotate_umis) — upstream materializes the
+# index only when a consumer requests it.
+[[rules]]
+name = "bam_index_sorted"
+description = "Index the sorted BAM (samtools index v9.15.0 wrapper)"
+when = "config.umi_read != \"\""
+input = ["results/mapped/vg/SRR702070.sorted.bam"]
+output = ["results/mapped/vg/SRR702070.sorted.bai"]
+shell = "samtools index {input} {output} 2> {log}"
+log = "logs/bam-index/SRR702070.log"
+
+[rules.environment]
+conda = "envs/samtools.yaml"
+
+# ---- upstream rule: annotate_umis ------------------------------------------
+# umi_tools group (no wrapper upstream, verbatim shell). Gated on a non-empty
+# config.umi_read (upstream: the samples.tsv umi_read column being set, i.e.
+# pd.notna). The annotated BAM is upstream temp() and the only input that
+# changes downstream: get_markduplicates_input switches MarkDuplicates to it
+# with --BARCODE_TAG BX. Upstream has no threads/resources on this rule.
+# Note: get_annotate_umis_params (umi_len/umi-position) is dead code upstream
+# — annotate_umis takes no such parameters, so none are rendered here.
+[[rules]]
+name = "annotate_umis"
+description = "Extract UMIs into the BX tag with umi_tools group (upstream mapping.smk annotate_umis)"
+when = "config.umi_read != \"\""
+input = [
+    "results/mapped/vg/SRR702070.sorted.bam",
+    "results/mapped/vg/SRR702070.sorted.bai",
+]
+output = ["results/mapped/vg/SRR702070.annotated.bam"]
+temporary = true
+shell = "umi_tools group -I {input[0]} --paired --umi-separator : --output-bam -S {output[0]} &> {log}"
+log = "logs/annotate_bam/vg/SRR702070.log"
+
+[rules.environment]
+conda = "envs/umi_tools.yaml"
+
 # ---- upstream rule: mark_duplicates ----------------------------------------
 # picard markduplicates v2.5.0 wrapper (3000 MiB, java overhead 0.3 -> -Xmx2100M).
 # config.markduplicates_extra renders upstream get_markduplicates_extra
 # (--TAG_DUPLICATE_SET_MEMBERS true when calc_consensus_reads is active;
 # empty by default — the default-path command keeps the byte-identical shape
-# modulo the trailing space).
+# modulo the trailing space). Gated on no UMI reads: upstream
+# get_markduplicates_input would switch the input to the annotated BAM
+# (mark_duplicates_umi twin below).
 [[rules]]
 name = "mark_duplicates"
 description = "Mark PCR duplicates with picard MarkDuplicates (markduplicates v2.5.0 wrapper)"
+when = "config.umi_read == \"\""
 input = ["results/mapped/vg/SRR702070.sorted.bam"]
 output = [
     "results/dedup/SRR702070.bam",
@@ -132,6 +193,35 @@ tmpdir=$(mktemp -d) && \
 (picard MarkDuplicates -Xmx2100M -Djava.io.tmpdir="$tmpdir" \
   --VALIDATION_STRINGENCY LENIENT --INPUT {input} --TMP_DIR "$tmpdir" \
   --OUTPUT {output[0]} --METRICS_FILE {output[1]} {config.markduplicates_extra}) 2> {log} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/picard/dedup/SRR702070.log"
+
+[rules.resources]
+memory = "3G"
+
+[rules.environment]
+conda = "envs/picard.yaml"
+
+# ---- upstream rule: mark_duplicates (UMI twin) -----------------------------
+# Same picard markduplicates v2.5.0 wrapper; input is the annotated BAM
+# (upstream get_markduplicates_input) and --BARCODE_TAG BX is appended
+# (upstream get_markduplicates_extra UMI branch). Same outputs as
+# mark_duplicates; the `when` gates are mutually exclusive.
+[[rules]]
+name = "mark_duplicates_umi"
+description = "Mark PCR duplicates with picard MarkDuplicates on the UMI-annotated BAM (--BARCODE_TAG BX)"
+when = "config.umi_read != \"\""
+input = ["results/mapped/vg/SRR702070.annotated.bam"]
+output = [
+    "results/dedup/SRR702070.bam",
+    "results/qc/dedup/SRR702070.metrics.txt",
+]
+shell = """
+tmpdir=$(mktemp -d) && \
+(picard MarkDuplicates -Xmx2100M -Djava.io.tmpdir="$tmpdir" \
+  --VALIDATION_STRINGENCY LENIENT --INPUT {input} --TMP_DIR "$tmpdir" \
+  --OUTPUT {output[0]} --METRICS_FILE {output[1]} {config.markduplicates_extra} --BARCODE_TAG BX) 2> {log} && \
 rm -rf "$tmpdir"
 """
 log = "logs/picard/dedup/SRR702070.log"
@@ -155,16 +245,66 @@ log = "logs/bam-index/SRR702070.log"
 [rules.environment]
 conda = "envs/samtools.yaml"
 
+# ---- upstream rule: splitncigarreads ----------------------------------------
+# gatk SplitNCigarReads (wrapper v3.1.0: `gatk --java-options '{java_opts}'
+# SplitNCIGARReads --reference --input --tmp-dir --output`; mem 1024 MiB,
+# java overhead 0.3 -> -Xmx716M). Gated on config.datatype == "rna"
+# (upstream get_recalibrate_quality_input RNA branch); the output is
+# upstream temp().
+[[rules]]
+name = "splitncigarreads"
+description = "Split N-cigar reads for RNA data with GATK SplitNCigarReads (wrapper v3.1.0)"
+when = "config.datatype == \"rna\""
+input = [
+    "results/dedup/SRR702070.bam",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+]
+output = ["results/split/SRR702070.bam"]
+temporary = true
+shell = """
+tmpdir=$(mktemp -d) && \
+(gatk --java-options '-Xmx716M -Djava.io.tmpdir='"$tmpdir" SplitNCigarReads \
+  --reference {input[1]} --input {input[0]} --tmp-dir "$tmpdir" \
+  --output {output[0]}) 2> {log} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/gatk/splitNCIGARreads/SRR702070.log"
+
+[rules.resources]
+memory = "1G"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+# ---- upstream rule: bam_index (split bam) ----------------------------------
+# samtools index v9.15.0 wrapper. Upstream `bam_index` has no ruleorder claim
+# on results/split/{sample}.bam, so the generic rule produces this index
+# (dedicated rule here; recalibrate_base_qualities_rna/apply_bqsr_rna consume
+# it like upstream). Gated like its consumers (recalibrate_base_qualities_rna/
+# apply_bqsr_rna).
+[[rules]]
+name = "bam_index_split"
+description = "Index the split-reads BAM (samtools index v9.15.0 wrapper)"
+when = "config.datatype == \"rna\""
+input = ["results/split/SRR702070.bam"]
+output = ["results/split/SRR702070.bai"]
+shell = "samtools index {input} {output} 2> {log}"
+log = "logs/bam-index/SRR702070.log"
+
+[rules.environment]
+conda = "envs/samtools.yaml"
+
 # ---- upstream rule: recalibrate_base_qualities -----------------------------
 # gatk baserecalibratorspark v1.25.0 wrapper (8 threads, 1024 MiB ->
-# -Xmx819M, --spark-master local[8]). Gated off by consensus_activate: with
-# consensus reads on, the consensus::recalibrate_base_qualities_consensus
-# variant (same outputs) takes over, mirroring upstream
-# get_recalibrate_quality_input.
+# -Xmx819M, --spark-master local[8]). Three-way gate with
+# consensus::recalibrate_base_qualities_consensus (config.datatype != "rna" &&
+# !consensus_activate) and mapping::recalibrate_base_qualities_rna
+# (config.datatype == "rna"), mirroring upstream get_recalibrate_quality_input
+# (rna checked first, then consensus).
 [[rules]]
 name = "recalibrate_base_qualities"
 description = "Build the BQSR recalibration table (baserecalibratorspark v1.25.0 wrapper)"
-when = "!config.consensus_activate"
+when = "config.datatype != \"rna\" && !config.consensus_activate"
 input = [
     "results/dedup/SRR702070.bam",
     "results/dedup/SRR702070.bai",
@@ -192,18 +332,88 @@ memory = "1G"
 [rules.environment]
 conda = "envs/gatk.yaml"
 
+# ---- upstream rule: recalibrate_base_qualities (RNA twin) ------------------
+# Same baserecalibratorspark v1.25.0 wrapper; the BAM input switches to
+# results/split/{sample}.bam(+.bai) (upstream get_recalibrate_quality_input
+# RNA branch, checked before the consensus branch). Same outputs as the DNA
+# rule; the `when` gates are mutually exclusive.
+[[rules]]
+name = "recalibrate_base_qualities_rna"
+description = "Build the BQSR recalibration table from the split-reads BAM (baserecalibratorspark v1.25.0 wrapper)"
+when = "config.datatype == \"rna\""
+input = [
+    "results/split/SRR702070.bam",
+    "results/split/SRR702070.bai",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.dict",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+    "resources/variation.noiupac.vcf.gz",
+    "resources/variation.noiupac.vcf.gz.tbi",
+]
+output = ["results/recal/SRR702070.grp"]
+shell = """
+tmpdir=$(mktemp -d) && \
+(gatk --java-options '-Xmx819M -Djava.io.tmpdir='"$tmpdir" BaseRecalibratorSpark \
+  --input {input[0]} --reference {input[2]} --tmp-dir "$tmpdir" \
+  --output {output} --known-sites {input[5]} \
+  -- --spark-runner LOCAL --spark-master local[8]) 2> {log} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/gatk/baserecalibrator/SRR702070.log"
+
+[rules.resources]
+threads = 8
+memory = "1G"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
 # ---- upstream rule: apply_bqsr ---------------------------------------------
 # gatk applybqsr v2.3.2 wrapper. The BAM index is produced by GATK itself
 # (upstream ruleorder: apply_bqsr > bam_index). The .bam is protected as
-# upstream (protected()). Gated off by consensus_activate, like
-# recalibrate_base_qualities (see consensus module header).
+# upstream (protected()). Three-way gate, like recalibrate_base_qualities
+# (see its comment).
 [[rules]]
 name = "apply_bqsr"
 description = "Apply BQSR with GATK ApplyBQSR (applybqsr v2.3.2 wrapper)"
-when = "!config.consensus_activate"
+when = "config.datatype != \"rna\" && !config.consensus_activate"
 input = [
     "results/dedup/SRR702070.bam",
     "results/dedup/SRR702070.bai",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.dict",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+    "results/recal/SRR702070.grp",
+]
+output = [
+    "results/recal/SRR702070.bam",
+    "results/recal/SRR702070.bai",
+]
+protected_output = ["results/recal/SRR702070.bam"]
+shell = """
+tmpdir=$(mktemp -d) && \
+(gatk --java-options '-Xmx164M -Djava.io.tmpdir='"$tmpdir" ApplyBQSR \
+  --input {input[0]} --bqsr-recal-file {input[5]} --reference {input[2]} \
+  --tmp-dir "$tmpdir" --output {output[0]}) 2> {log} && \
+rm -rf "$tmpdir"
+"""
+log = "logs/gatk/gatk_applybqsr/SRR702070.log"
+
+[rules.environment]
+conda = "envs/gatk.yaml"
+
+# ---- upstream rule: apply_bqsr (RNA twin) ----------------------------------
+# Same applybqsr v2.3.2 wrapper; the BAM input switches to
+# results/split/{sample}.bam(+.bai) (upstream get_recalibrate_quality_input
+# RNA branch). Same outputs (protected .bam); the `when` gates are mutually
+# exclusive.
+[[rules]]
+name = "apply_bqsr_rna"
+description = "Apply BQSR with GATK ApplyBQSR on the split-reads BAM (applybqsr v2.3.2 wrapper)"
+when = "config.datatype == \"rna\""
+input = [
+    "results/split/SRR702070.bam",
+    "results/split/SRR702070.bai",
     "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
     "resources/genome.dna.homo_sapiens.GRCh38.111.dict",
     "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
