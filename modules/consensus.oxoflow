@@ -22,11 +22,14 @@
 #
 # Deviations (details in README.md):
 #   * Upstream switches the INPUT of the single recalibrate_base_qualities /
-#     apply_bqsr rules (get_recalibrate_quality_input). The port models this
-#     as gated duplicate rules with the same outputs: the default rules in
-#     mapping.oxoflow gain when="!config.consensus_activate" and the _consensus
-#     variants here are gated on the same key. The when gates are exclusive,
-#     so exactly one rule produces results/recal/SRR702070.grp(.bam) per run.
+#     apply_bqsr rules (get_recalibrate_quality_input: RNA checked first, then
+#     consensus). The port models this as gated duplicate rules with the same
+#     outputs: the default rules in mapping.oxoflow gain
+#     when="config.datatype != \"rna\" && !config.consensus_activate", the
+#     _rna variants (mapping.oxoflow) are gated on config.datatype == "rna",
+#     and the _consensus variants here on consensus_activate with the
+#     datatype guard. The when gates are exclusive, so exactly one rule
+#     produces results/recal/SRR702070.grp(.bam) per run.
 #   * map_consensus_reads freezes read_type (pe|se) into two rules; the
 #     upstream wildcard_constraints are gone with the wildcard.
 #   * The bwa index inputs are the port's mapping_bwa::bwa_index outputs
@@ -192,7 +195,7 @@ conda = "envs/samtools.yaml"
 [[rules]]
 name = "recalibrate_base_qualities_consensus"
 description = "Build the BQSR recalibration table from consensus reads (baserecalibratorspark v1.25.0 wrapper)"
-when = "config.consensus_activate"
+when = "config.datatype != \"rna\" && config.consensus_activate"
 input = [
     "results/consensus/SRR702070.bam",
     "results/consensus/SRR702070.bai",
@@ -224,7 +227,7 @@ conda = "envs/gatk.yaml"
 [[rules]]
 name = "apply_bqsr_consensus"
 description = "Apply BQSR to consensus reads with GATK ApplyBQSR (applybqsr v2.3.2 wrapper)"
-when = "config.consensus_activate"
+when = "config.datatype != \"rna\" && config.consensus_activate"
 input = [
     "results/consensus/SRR702070.bam",
     "results/consensus/SRR702070.bai",

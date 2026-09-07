@@ -138,6 +138,30 @@ fusion_activate = false
 # main.oxoflow itself for multiple files.
 target_regions = ""
 
+# upstream config: samples.tsv `umi_read` column (mapping.smk annotate_umis
+# + get_markduplicates_input BARCODE_TAG branch). Non-empty = UMI-containing
+# reads: results are passed through `umi_tools group` (annotate_umis) and
+# MarkDuplicates consumes the annotated BAM with `--BARCODE_TAG BX`. Empty
+# (default) mirrors an empty upstream samples.tsv column = UMI flow off.
+umi_read = ""
+
+# upstream config: samples.tsv `datatype` column (get_recalibrate_quality_input
+# RNA branch). "rna" inserts the GATK SplitNCigarReads step
+# (mapping::splitncigarreads) and re-sources the BQSR chain from
+# results/split/{sample}.bam; "dna" (default) keeps today's exact behavior.
+datatype = "dna"
+
+# upstream rules: testcase.smk (debug module, gather_observations + testcase).
+# Opt-in only — upstream has no rule-all consumer for it; it renders
+# results/testcases/{group}/{caller}/{locus} with `varlociraptor call
+# variants --testcase-prefix`. testcase_locus is the upstream
+# {wildcards.locus} (e.g. "chr1:1000-2000"); empty = no locus to test.
+# varlociraptor_call_extra is upstream params/varlociraptor/call
+# (consumed by the testcase rules only).
+testcase_activate = false
+testcase_locus = ""
+varlociraptor_call_extra = ""
+
 # ---------------------------------------------------------------------------
 # Sample groups (upstream config/samples.tsv: SRR702070 -> SRR702070_group,
 # alias "tumor", platform ILLUMINA, purity 1.0, datatype dna, calling variants)
@@ -242,3 +266,7 @@ namespace = "consensus"
 [[include]]
 path = "modules/fusion.oxoflow"
 namespace = "fusion"
+
+[[include]]
+path = "modules/testcase.oxoflow"
+namespace = "testcase"

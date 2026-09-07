@@ -1,0 +1,124 @@
+# Testcase rendering branch (upstream workflow/rules/testcase.smk, gated on
+# upstream `debug` usage — upstream has no rule-all consumer for these rules,
+# so they are opt-in only).
+#
+# Upstream gathers the per-scatteritem observation chunks of a group into one
+# BCF (bcftools concat v2.3.2 wrapper) and renders a varlociraptor testcase
+# directory with `varlociraptor call variants --testcase-prefix ... --testcase-locus`.
+#
+# Rule map (upstream rule -> this module):
+#   gather_observations -> testcase::gather_observations_{freebayes,delly}
+#                          (bcftools concat v2.3.2 wrapper; caller wildcard
+#                          frozen into the two rules)
+#   testcase            -> testcase::testcase_{freebayes,delly}
+#                          ({locus} wildcard frozen to config.testcase_locus)
+#
+# Deviations (details in README.md):
+#   * Upstream expands over all callers and groups with {locus} as a wildcard
+#     set by the invocation; the port freezes caller to the two ported callers
+#     and {locus} to config.testcase_locus (the upstream test invocation uses
+#     a single locus). The {group} alias "tumor" is hardcoded in --obs
+#     exactly as upstream get_varlociraptor_obs_args renders it.
+#   * The upstream `directory()` output is a directory + `.completed` marker
+#     file (oxo-flow targets files); the marker is the rule output.
+#   * gather_observations consumes results/observations/{caller}/.../SRR702070.0.bcf
+#     (scatteritem frozen to 0, like the rest of the port); upstream's
+#     scatter.calling(16) would produce 16 chunks gathered with the same
+#     `bcftools concat -a`.
+#
+# Debug-only: activating testcase_activate schedules the testcase rules for
+# both callers, but no default-path rule consumes results/testcases/ — the
+# rendered directory is an inspection artifact, exactly as upstream.
+
+[workflow]
+name = "testcase"
+
+# ---- upstream rule: gather_observations -------------------------------------
+# bcftools concat v2.3.2 wrapper (uncompressed_bcf=False -> --output-type b;
+# threads 4, mem_mb=10).
+[[rules]]
+name = "gather_observations_freebayes"
+description = "Gather the freebayes observation chunks into one BCF (bcftools concat v2.3.2 wrapper)"
+when = "config.testcase_activate"
+input = ["results/observations/freebayes/SRR702070_group/SRR702070.0.bcf"]
+output = ["results/observations/freebayes/SRR702070_group/SRR702070.all.bcf"]
+shell = "bcftools concat --output {output[0]} --output-type b -a {input[0]} 2> {log}"
+log = "logs/gather-observations/freebayes/SRR702070_group/SRR702070.log"
+
+[rules.resources]
+threads = 4
+memory = "10M"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+[[rules]]
+name = "gather_observations_delly"
+description = "Gather the delly observation chunks into one BCF (bcftools concat v2.3.2 wrapper)"
+when = "config.testcase_activate"
+input = ["results/observations/delly/SRR702070_group/SRR702070.0.bcf"]
+output = ["results/observations/delly/SRR702070_group/SRR702070.all.bcf"]
+shell = "bcftools concat --output {output[0]} --output-type b -a {input[0]} 2> {log}"
+log = "logs/gather-observations/delly/SRR702070_group/SRR702070.log"
+
+[rules.resources]
+threads = 4
+memory = "10M"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
+# ---- upstream rule: testcase -------------------------------------------------
+# varlociraptor call variants --testcase-prefix mode. The directory output is
+# modeled as directory + `.completed` marker (see the module header);
+# {params.extra} is upstream params/varlociraptor/call (config
+# varlociraptor_call_extra, empty default).
+[[rules]]
+name = "testcase_freebayes"
+description = "Render the freebayes varlociraptor testcase (varlociraptor call --testcase-prefix)"
+when = "config.testcase_activate"
+input = [
+    "results/observations/freebayes/SRR702070_group/SRR702070.all.bcf",
+    "resources/scenarios/SRR702070_group.yaml",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+    "results/recal/SRR702070.bam",
+    "results/recal/SRR702070.bai",
+]
+output = ["results/testcases/SRR702070_group/freebayes/{config.testcase_locus}/.completed"]
+shell = """
+mkdir -p $(dirname {output[0]}) && \
+varlociraptor call variants --testcase-prefix $(dirname {output[0]}) \
+  --testcase-locus {config.testcase_locus} {config.varlociraptor_call_extra} \
+  generic --obs tumor={input[0]} --scenario {input[1]} 2> {log} && \
+touch {output[0]}
+"""
+log = "logs/varlociraptor/testcase/freebayes/SRR702070_group/{config.testcase_locus}.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+[[rules]]
+name = "testcase_delly"
+description = "Render the delly testcase (varlociraptor call --testcase-prefix)"
+when = "config.testcase_activate"
+input = [
+    "results/observations/delly/SRR702070_group/SRR702070.all.bcf",
+    "resources/scenarios/SRR702070_group.yaml",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+    "results/recal/SRR702070.bam",
+    "results/recal/SRR702070.bai",
+]
+output = ["results/testcases/SRR702070_group/delly/{config.testcase_locus}/.completed"]
+shell = """
+mkdir -p $(dirname {output[0]}) && \
+varlociraptor call variants --testcase-prefix $(dirname {output[0]}) \
+  --testcase-locus {config.testcase_locus} {config.varlociraptor_call_extra} \
+  generic --obs tumor={input[0]} --scenario {input[1]} 2> {log} && \
+touch {output[0]}
+"""
+log = "logs/varlociraptor/testcase/delly/SRR702070_group/{config.testcase_locus}.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"

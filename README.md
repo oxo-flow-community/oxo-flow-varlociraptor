@@ -107,12 +107,16 @@ Varlociraptor calling + FDR control over 8 variant types, VEP/dbSNFP
 annotation, filtering, and the datavzrd report. The upstream branch modules
 (trimming, primers, MAF export, population-db filtering, plugins, CHM1
 benchmarking, bwa alignment, consensus-read calling, mutational
-burden/signatures, fusion calling) are ported as gated modules, off by
-default — see "Gated branch modules"; DGIdb annotation of the final calls
-lives in `annotation.oxoflow`, also gated.
-`oxo-flow validate` counts every rule unconditionally: 165 rules / 284
+burden/signatures, fusion calling, testcase debug rendering) are ported as
+gated modules, off by default — see "Gated branch modules"; DGIdb annotation
+of the final calls lives in `annotation.oxoflow`, also gated. Two
+sample-level branches of the default-path mapping module are gated on config
+keys instead of separate modules: `umi_read` (UMI-annotated dedup via
+umi_tools + picard `--BARCODE_TAG BX`) and `datatype = "rna"` (GATK
+SplitNCigarReads + split-BAM-sourced BQSR).
+`oxo-flow validate` counts every rule unconditionally: 176 rules / 336
 dependencies (88 rules execute on the default path alone; the executor skips
-the 77 gated rules at run time when their key is `false`).
+the 88 gated rules at run time when their key is `false`).
 
 ### Configuration
 
@@ -135,6 +139,9 @@ the 77 gated rules at run time when their key is `false`).
 | `dgidb_activate` / `annotation_selection` | `annotations/dgidb` / `get_final_selected_annotation` | `false` / `db_annotated` | DGIdb annotation of the final calls; set `annotation_selection = "dgidb_annotated"` together with `dgidb_activate` |
 | `freebayes_min_alternate_count` | `params/freebayes` | `2` | upstream: `1` when consensus reads are on |
 | `markduplicates_extra` | `params/picard/MarkDuplicates` + `get_markduplicates_extra` | `""` | extra MarkDuplicates args; upstream adds `--TAG_DUPLICATE_SET_MEMBERS true` when consensus reads are on |
+| `umi_read` | `config/samples.tsv` `umi_read` column | `""` | UMI-containing reads: the sorted BAM is passed through `umi_tools group` (`mapping::annotate_umis`) and MarkDuplicates consumes the annotated BAM with `--BARCODE_TAG BX` (`mapping::mark_duplicates_umi`); empty (default) mirrors an empty upstream samples.tsv column = UMI flow off |
+| `datatype` | `config/samples.tsv` `datatype` column (`get_recalibrate_quality_input`) | `"dna"` | `"rna"` inserts GATK SplitNCigarReads (`mapping::splitncigarreads`) and re-sources the BQSR chain from `results/split/{sample}.bam` (`*_rna` twins); `"dna"` keeps today's exact behavior. The remaining upstream datatype branches (long-read) are not ported |
+| `testcase_activate` / `testcase_locus` / `varlociraptor_call_extra` | `testcase.smk` (debug module) | `false` / `""` / `""` | render a varlociraptor testcase directory (`varlociraptor call variants --testcase-prefix`, `results/testcases/...`) for both ported callers; opt-in like upstream (no rule-all consumer), `{locus}` = `testcase_locus` (e.g. `chr1:1000-2000`) |
 
 Per-group calling mode: the upstream `config/samples.tsv` `calling` column (variants | fusions | variants,fusions) is ported as `[sample_groups.metadata] calling` (default row `variants`). The fusions continuation rules in `calling.oxoflow` are gated on it (`wildcard.calling == "fusions" || wildcard.calling == "variants,fusions"`), so groups without the row or with `variants` keep today's exact behavior.
 
@@ -148,7 +155,7 @@ REVEL score file `resources/revel_scores.tsv.gz`, dbSNFP
 
 ### Gated branch modules
 
-Ten upstream branch modules are ported as separate files under `modules/`,
+Eleven upstream branch modules are ported as separate files under `modules/`,
 each gated by `when = "config.<key>_activate"` (default `false`, so the
 default path is unchanged). Each module header documents its rule map,
 frozen wildcards, deviations, and excluded upstream rules:
@@ -172,6 +179,7 @@ plan identical.
 | `modules/burden_signatures.oxoflow` | mutational burden + signatures | 20 VAF thresholds (5..100 step 5); `gather_annotated_calls` feeds the burden input |
 | `modules/consensus.oxoflow` | consensus-read calling flow (8 rules) | `calc_consensus_reads` + re-mapping + BQSR on the consensus BAM; needs the bwa index |
 | `modules/fusion.oxoflow` | star_arriba candidate calling | ends at the group candidate BCF; with the group's `calling` metadata including `fusions` the candidates continue into the varlociraptor calling flow (`calling::*_arriba`, gated); `envs/star.yaml` + `envs/arriba.yaml` |
+| `modules/testcase.oxoflow` | `testcase.smk` debug module (`gather_observations` + `testcase`) | renders `results/testcases/{group}/{caller}/{locus}` via `varlociraptor call variants --testcase-prefix`; `{locus}` frozen to `config.testcase_locus`, directory + `.completed` marker output; opt-in like upstream (no rule-all consumer); `envs/bcftools.yaml` + `envs/varlociraptor.yaml` |
 
 ## Source
 
@@ -200,6 +208,9 @@ deliberate deviations:
 | snakemake script API (`snakemake.input/output/params`) in the 6 branch scripts | argv ports (`--output`/`--log` flags, comma-joined lists) | same logic verbatim, cf. the default-path script ports |
 | chm sample group vertical slice (benchmarking) | not ported | the ported CHM-eval flow (`chm_eval_sample` ... `chm_eval`) re-derives the CHM1 FASTQs, but the chm sample is not in the port's `config/samples.tsv`, so the chm reads do not flow through mapping -> calling -> `control_fdr`; `rename_chromosomes`/`chm_eval` keep orphan inputs (validate warns, like upstream without the chm sample) |
 | consensus-read calling (`calc_consensus_reads` flow) | `consensus.oxoflow`, gated on `consensus_activate` | upstream switches the `recalibrate_base_qualities`/`apply_bqsr` input via `get_recalibrate_quality_input`; the port models this as gated duplicate rules with the same outputs and exclusive `when` gates (`!consensus_activate` vs `consensus_activate`) |
+| `annotate_umis` (mapping.smk UMI branch) + `get_markduplicates_input`/`get_markduplicates_extra` UMI branch | `mapping.oxoflow` `annotate_umis`/`mark_duplicates_umi` twins, gated on `umi_read` | upstream switches MarkDuplicates to the umi_tools-annotated BAM with `--BARCODE_TAG BX` when the samples.tsv `umi_read` column is set; the port models this as exclusive twins of the plain dedup rules (`umi_tools group`, `umi_tools` env), with the sorted-BAM index (`bam_index_sorted`) gated like its only consumer |
+| `splitncigarreads` (mapping.smk) + `get_recalibrate_quality_input` RNA branch | `mapping.oxoflow` `splitncigarreads`/`bam_index_split`/`*_rna` twins, gated on `datatype = "rna"` | upstream inserts SplitNCigarReads and re-sources BQSR from the split BAM when the samples.tsv `datatype` column is `rna`; the port models this as `*_rna` twins of the BQSR chain, with the three-way gate (dna / rna / consensus) shared with `consensus.oxoflow` |
+| `testcase.smk` debug module (`gather_observations`, `testcase`) | `testcase.oxoflow`, gated on `testcase_activate` + `testcase_locus` | upstream debug rules with no rule-all consumer (opt-in via invocation); the port freezes the caller wildcard to the two ported callers and `{locus}` to `config.testcase_locus`, the `directory()` output becomes a directory + `.completed` marker, and the `--obs tumor=` group alias is hardcoded like upstream `get_varlociraptor_obs_args` |
 | `annotate_dgidb` | `annotation::annotate_dgidb`, gated on `dgidb_activate` + `annotation_selection` | upstream `get_final_selected_annotation` switches the annotated callset consumed by filtering and the final-calls chain; the port exposes the same selection as `config.annotation_selection` |
 | `filter_offtarget_variants` (wrapper v2.3.2/bio/bcftools/filter, `params.extra=""`) | pass-through `bcftools filter -o/-O b` on the fixed calls; the `regions`/index inputs are declared (as upstream) so `get_target_regions` and the candidate indexes exist pre-scatter | the pinned wrapper consumes only `input[0]` (verified against its source); the actual target-region restriction is the `filter_group_regions` bedtools intersect below |
 | `target_regions` list config | single BED path or a list of BED paths (`config.target_regions`, `len(...) > 0` gate) | upstream merges one or more files; the port merges all configured files with the same `sort -k1,1 -k2,2n | mergeBed` pipeline |
@@ -215,8 +226,12 @@ deliberate deviations:
 bash test/run.sh
 ```
 
-Runs `oxo-flow validate`, `oxo-flow lint`, a `dry-run` smoke check and a debug
-scan for unexpanded wildcards; CI runs the same script on every push.
+Runs `oxo-flow validate`, `oxo-flow lint`, a `dry-run` smoke check, a debug
+scan for unexpanded wildcards and four dry-run branch checks that flip the
+gated config keys into a temporary copy of `main.oxoflow` (ribodetector-style
+exclusive-gate sanity for the `umi_read`, `datatype = "rna"` and
+`testcase_activate`/`testcase_locus` branches, plus the fusions-continuation
+`calling` metadata gate); CI runs the same script on every push.
 
 ## License
 
