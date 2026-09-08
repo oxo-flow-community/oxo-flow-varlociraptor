@@ -1,0 +1,23 @@
+{
+  "params": {
+    "groups": ["SRR702070_group"],
+    "species": "homo_sapiens",
+    "samples": {
+      "columns": ["sample_name", "alias", "group", "platform", "purity", "panel", "umi_read", "umi_len", "datatype", "calling"],
+      "data": [["SRR702070", "tumor", "SRR702070_group", "ILLUMINA", 1.0, "", "", "", "dna", "fusions"]]
+    },
+    "group_annotations": {
+      "columns": ["group"],
+      "data": [["SRR702070_group"]],
+      "index": ["group"]
+    },
+    "labels": {"columns": [], "data": []}
+  },
+  "wildcards": {
+    "event": "some_id",
+    "batch": "all"
+  },
+  "input": {
+    "fusion_calls": ["results/tables/SRR702070_group/SRR702070_group.some_id.fusions.joined.fdr-controlled.tsv"]
+  }
+}

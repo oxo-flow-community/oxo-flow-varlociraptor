@@ -114,7 +114,7 @@ sample-level branches of the default-path mapping module are gated on config
 keys instead of separate modules: `umi_read` (UMI-annotated dedup via
 umi_tools + picard `--BARCODE_TAG BX`) and `datatype = "rna"` (GATK
 SplitNCigarReads + split-BAM-sourced BQSR).
-`oxo-flow validate` counts every rule unconditionally: 176 rules / 336
+`oxo-flow validate` counts every rule unconditionally: 179 rules / 340
 dependencies (88 rules execute on the default path alone; the executor skips
 the 88 gated rules at run time when their key is `false`).
 
@@ -133,7 +133,7 @@ the 88 gated rules at run time when their key is `false`).
 | `mutational_signatures_activate` | `mutational_signatures` section | `false` | COSMIC v3.4 signature fitting + plots |
 | `benchmarking_activate` | `benchmarking.smk` | `false` | CHM1/CHM13 benchmark flow (EBI alignment + CHM-eval kit downloads; the chm sample group vertical slice is not ported) |
 | `plugins_activate` / `cadd_build` / `cadd_version` / `cadd_variant_type` | `plugins.smk` / `wildcards` | `false` / `GRCh38` / `v1.7` / `snv` | CADD score download for VEP |
-| `fusion_activate` | `fusion_calling.smk` (star_arriba meta wrapper) | `false` | STAR + Arriba fusion candidate calling; with a group whose `calling` metadata includes `fusions`, the candidates continue into the varlociraptor calling flow (`calling::*_arriba`, gated on the metadata) and through the fusions FDR-control chain (`filtering::*_fusions`, BND-only, same gate) |
+| `fusion_activate` | `fusion_calling.smk` (star_arriba meta wrapper) | `false` | STAR + Arriba fusion candidate calling; with a group whose `calling` metadata includes `fusions`, the candidates continue into the varlociraptor calling flow (`calling::*_arriba`, gated on the metadata) and through the fusions FDR-control chain (`filtering::*_fusions`, BND-only, same gate), then out through the fusions vembrane table (`table::vembrane_table_fusions`), the arriba-joined table (`report::process_fusion_call_tables`) and the datavzrd fusion-call report (`report::datavzrd_fusion_calls`) |
 | `target_regions` | `target_regions` list (regions.smk) | `""` | one BED path or a list of BED paths (all merged + chr-stripped by `regions::get_target_regions` via `cat {input}` over the expanded list), intersected into the per-group regions, and the fixed candidates offtarget-filtered pre-scatter; empty string or empty list = whole-genome calling as today |
 | `consensus_activate` | `calc_consensus_reads/activate` | `false` | fragment-consensus read collapse + re-mapping to the bwa reference (8 rules); combine with `bwa_align_activate`, `markduplicates_extra = "--TAG_DUPLICATE_SET_MEMBERS true"` and `freebayes_min_alternate_count = 1` |
 | `dgidb_activate` / `annotation_selection` | `annotations/dgidb` / `get_final_selected_annotation` | `false` / `db_annotated` | DGIdb annotation of the final calls; set `annotation_selection = "dgidb_annotated"` together with `dgidb_activate` |
@@ -215,7 +215,9 @@ deliberate deviations:
 | `filter_offtarget_variants` (wrapper v2.3.2/bio/bcftools/filter, `params.extra=""`) | pass-through `bcftools filter -o/-O b` on the fixed calls; the `regions`/index inputs are declared (as upstream) so `get_target_regions` and the candidate indexes exist pre-scatter | the pinned wrapper consumes only `input[0]` (verified against its source); the actual target-region restriction is the `filter_group_regions` bedtools intersect below |
 | `target_regions` list config | single BED path or a list of BED paths (`config.target_regions`, `len(...) > 0` gate) | upstream merges one or more files; the port merges all configured files with the same `sort -k1,1 -k2,2n | mergeBed` pipeline |
 | `filter_group_regions` `get_filter_targets` (bedtools intersect) | same command inline in the two `filter_group_regions_*` rules | byte-identical output; intersect branch only when `target_regions` is set |
-| per-group `calling` column of `config/samples.tsv` | `[sample_groups.metadata] calling` on each group | fusions continuation rules gate on `wildcard.calling == "fusions" || "variants,fusions"` — both the `calling.oxoflow` continuation and the `filtering.oxoflow` fusions FDR-control chain; per upstream `get_control_fdr_input`, the fusions chain bypasses the annotation filter and consumes the raw fusions callset |
+| per-group `calling` column of `config/samples.tsv` | `[sample_groups.metadata] calling` on each group | fusions continuation rules gate on `wildcard.calling == "fusions" || "variants,fusions"` — the `calling.oxoflow` continuation, the `filtering.oxoflow` fusions FDR-control chain, and the fusions exports (`table::vembrane_table_fusions`, `report::process_fusion_call_tables`, `report::datavzrd_fusion_calls`); per upstream `get_control_fdr_input`, the fusions chain bypasses the annotation filter and consumes the raw fusions callset |
+| `vembrane_table` (calling_type=fusions instance of the single wildcard rule) | `table::vembrane_table_fusions`, same `when` gate as the filtering fusions chain | the fusions instance of `get_vembrane_config` drops the ANN fields (fusions records carry no ANN annotation) and `INFO['EVENT']` (consumed by the partner pairing) — 23 columns, header/expr precomputed like the variants instance |
+| `process_fusion_call_tables` arriba input (`expand` over the group's rna/fusions samples) | frozen to the default sample `results/arriba/SRR702070.fusions.annotated.tsv` (producer `fusion::annotate_exons`) | single fixture sample; with more than one fusions sample the port would need one rule per sample |
 | `get_candidate_calls` for caller=arriba (UNFILTERED group concat) + `get_varlociraptor_params` (propagate-info-fields extra) | `calling::varlociraptor_preprocess_arriba`/`varlociraptor_call_arriba` consuming `results/candidate-calls/arriba/{group}/{group}.bcf` | command text identical; the arriba path has no scatter fan-out (no scatteritem) |
 | `scatter_candidates`/`filter_group_regions` conditional inputs (Python `if config.get("target_regions", None)`) | `optional = "any"` input pairs + `if [ -n "{config.target_regions}" ]` shell switch | engine equivalent of the upstream input selection |
 | upstream `get_target_regions` chr-strip (`awk '{sub("^chr","",$0); print}'`) | verbatim | target BEDs must be chr-less (Ensembl GRCh38 primary assembly); chr-prefixed files fail closed, exactly as upstream |
@@ -227,11 +229,13 @@ bash test/run.sh
 ```
 
 Runs `oxo-flow validate`, `oxo-flow lint`, a `dry-run` smoke check, a debug
-scan for unexpanded wildcards and four dry-run branch checks that flip the
+scan for unexpanded wildcards and five dry-run branch checks that flip the
 gated config keys into a temporary copy of `main.oxoflow` (ribodetector-style
 exclusive-gate sanity for the `umi_read`, `datatype = "rna"` and
 `testcase_activate`/`testcase_locus` branches, plus the fusions-continuation
-`calling` metadata gate); CI runs the same script on every push.
+`calling` metadata gate — which also asserts the fusions table/joined-table/
+datavzrd fusion-report rules join the plan); CI runs the same script on
+every push.
 
 ## License
 

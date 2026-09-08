@@ -121,11 +121,27 @@ grep -qE "^  [0-9]+\. calling::varlociraptor_call_arriba[^ ]*  \[run" /tmp/oxo-d
     || { echo "fusions branch: varlociraptor_call_arriba not scheduled"; exit 1; }
 grep -qE "^  [0-9]+\. filtering::merge_calls_fusions[^ ]*  \[run" /tmp/oxo-dryrun-fusions-$$.txt \
     || { echo "fusions branch: merge_calls_fusions not scheduled"; exit 1; }
+grep -qE "^  [0-9]+\. table::vembrane_table_fusions[^ ]*  \[run" /tmp/oxo-dryrun-fusions-$$.txt \
+    || { echo "fusions branch: vembrane_table_fusions not scheduled"; exit 1; }
+grep -qE "^  [0-9]+\. report::process_fusion_call_tables[^ ]*  \[run" /tmp/oxo-dryrun-fusions-$$.txt \
+    || { echo "fusions branch: process_fusion_call_tables not scheduled"; exit 1; }
+grep -qE "^  [0-9]+\. report::datavzrd_fusion_calls[^ ]*  \[run" /tmp/oxo-dryrun-fusions-$$.txt \
+    || { echo "fusions branch: datavzrd_fusion_calls not scheduled"; exit 1; }
 if grep -qE "^  [0-9]+\. fusion::star_index[^ ]*  \[skip" /tmp/oxo-dryrun-fusions-$$.txt; then
     echo "fusions branch: fusion::star_index unexpectedly skipped"; exit 1
 fi
 rm -f .fusions-test-tmp.oxoflow
 trap - EXIT
-echo "  fusion:: family + arriba preprocess/call twins on; STAR index activated"
+echo "  fusion:: family + arriba preprocess/call twins + fusions table/report exports on"
+
+echo "==> fusions exports: default plan must keep the fusions exports gated off"
+# The three fusions-export rules gate on the group's `calling` metadata; the
+# default plan (calling = "variants") must not schedule any of them.
+for rule in "table::vembrane_table_fusions" "report::process_fusion_call_tables" "report::datavzrd_fusion_calls"; do
+    if grep -qE "^  [0-9]+\. ${rule}[^ ]*  \[run" /tmp/oxo-dryrun-$$.txt; then
+        echo "default plan: ${rule} unexpectedly scheduled"; exit 1
+    fi
+done
+echo "  vembrane_table_fusions / process_fusion_call_tables / datavzrd_fusion_calls off in the default plan"
 
 echo "PASS"

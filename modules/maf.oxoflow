@@ -11,10 +11,8 @@
 #     calling_type (the default event covers variants + fusions) are frozen to
 #     event=some_id x calling_type=variants/fusions, one rule pair per type.
 #   * The fusions pair consumes
-#     results/final-calls/{group}/{group}.some_id.fusions.fdr-controlled.bcf,
-#     which the port does not produce (the fusions varlociraptor calling /
-#     FDR-control branch of calling.smk + filtering.smk is not ported — the
-#     fusion module only ports the star_arriba candidate-calling front end).
+#     results/final-calls/{group}/{group}.some_id.fusions.fdr-controlled.bcf
+#     (produced by the fusions filtering chain, see filtering.oxoflow).
 #   * params are the RESOLVED values of the common.smk helper functions for
 #     the frozen wildcards (see derivation comments below):
 #       - genome_build = config ref/build = GRCh38
