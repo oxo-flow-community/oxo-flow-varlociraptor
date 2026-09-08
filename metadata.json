@@ -166,6 +166,7 @@
     "prepare_oncoprint",
     "primer_to_bed",
     "process_call_tables",
+    "process_fusion_call_tables",
     "process_revel_scores",
     "recalibrate_base_qualities",
     "recalibrate_base_qualities_consensus",
@@ -201,9 +202,7 @@
     "varlociraptor_preprocess_delly",
     "varlociraptor_preprocess_freebayes",
     "vembrane_table",
-    "vembrane_table_fusions",
-    "process_fusion_call_tables",
-    "datavzrd_fusion_calls"
+    "vembrane_table_fusions"
   ],
   "excluded": [
     "annotate_umis (upstream mapping.smk:77, UMI branch via umi_tools group) and splitncigarreads (upstream mapping.smk:173, RNA-datatype branch in get_recalibrate_quality_input) — now ported as gated rules (mapping.oxoflow): config.umi_read (empty default = UMI flow off, mirroring an empty upstream samples.tsv column) and config.datatype = \"rna\" (default \"dna\" keeps the DNA path). The remaining datatype branches of the upstream samples.tsv columns (e.g. long-read datatypes) stay unported — the port models DNA/RNA short-read data only.",
