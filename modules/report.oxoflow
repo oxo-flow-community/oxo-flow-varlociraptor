@@ -1,19 +1,25 @@
 # Interactive datavzrd reports (upstream workflow/rules/datavzrd.smk).
 #
 # Rule map (upstream rule -> this module):
-#   process_call_tables    -> report::process_call_tables
-#   bedtools_merge         -> report::bedtools_merge (bedtools intersect v2.6.0 wrapper)
-#   coverage_table         -> report::coverage_table
-#   datavzrd_variants_calls -> report::datavzrd_variants_calls (datavzrd v9.14.0 wrapper)
-#   datavzrd_coverage      -> report::datavzrd_coverage    (datavzrd v9.14.0 wrapper)
+#   process_call_tables         -> report::process_call_tables
+#   process_fusion_call_tables  -> report::process_fusion_call_tables
+#   bedtools_merge              -> report::bedtools_merge (bedtools intersect v2.6.0 wrapper)
+#   coverage_table              -> report::coverage_table
+#   datavzrd_variants_calls     -> report::datavzrd_variants_calls (datavzrd v9.14.0 wrapper)
+#   datavzrd_fusion_calls       -> report::datavzrd_fusion_calls   (datavzrd v9.14.0 wrapper)
+#   datavzrd_coverage           -> report::datavzrd_coverage      (datavzrd v9.14.0 wrapper)
 #
 # Deviations (details in README.md):
 #   * prepare_oncoprint runs (its label_sortings directory is a static input
 #     of datavzrd_variants_calls), but with a single group the rendered
 #     template has no oncoprint datasets/views (get_oncoprint returns empty
 #     lists); the directory outputs become marker files.
-#   * process_fusion_call_tables/datavzrd_fusion_calls are not in the default
-#     path (no fusions).
+#   * process_fusion_call_tables/datavzrd_fusion_calls are gated on the
+#     group's `calling` metadata like the filtering fusions chain (default
+#     calling="variants" keeps them SkippedByWhen). The arriba input is
+#     frozen to the default sample (results/arriba/SRR702070.fusions.annotated.tsv,
+#     producer fusion::annotate_exons); with more than one fusions sample the
+#     port would need one rule per sample.
 #   * yte templating is driven by scripts/datavzrd.py with a pre-rendered
 #     variables JSON (datavzrd v9.14.0 wrapper semantics preserved).
 #   * event_desc/labels are the values of the "some_id" event in the upstream
@@ -124,6 +130,7 @@ conda = "envs/datavzrd.yaml"
 
 # ---- upstream rule: datavzrd_coverage ---------------------------------------
 # datavzrd v9.14.0 wrapper. Default target (upstream rule all).
+
 [[rules]]
 name = "datavzrd_coverage"
 description = "Render the per-gene coverage report (datavzrd v9.14.0 wrapper)"
@@ -139,6 +146,53 @@ python scripts/datavzrd.py resources/datavzrd/gene-coverage-template.datavzrd.ya
   --output results/datavzrd-report/SRR702070_group.coverage --log {log}
 """
 log = "logs/datavzrd_report/SRR702070_group.coverage.log"
+
+[rules.environment]
+conda = "envs/datavzrd.yaml"
+
+# ---- upstream rule: process_fusion_call_tables -------------------------------
+# create_fusions_table_per_group.py joins first/second breakend partners and
+# the arriba annotations. The arriba input is frozen to the default sample
+# (upstream expand over the group's rna/fusions samples — single fixture
+# sample). Gated like the filtering fusions chain.
+[[rules]]
+name = "process_fusion_call_tables"
+description = "Join fusions table partners with arriba annotations (scripts/create_fusions_table_per_group.py)"
+when = "wildcard.calling == \"fusions\" || wildcard.calling == \"variants,fusions\""
+input = [
+    "results/tables/{group}/{group}.some_id.fusions.fdr-controlled.tsv",
+    "results/arriba/SRR702070.fusions.annotated.tsv",
+]
+output = ["results/tables/{group}/{group}.some_id.fusions.joined.fdr-controlled.tsv"]
+shell = """
+python scripts/create_fusions_table_per_group.py {input[0]} {input[1]} \
+  --output {output} --log {log}
+"""
+log = "logs/join_partner/{group}.some_id.log"
+
+[rules.environment]
+conda = "envs/pystats.yaml"
+
+# ---- upstream rule: datavzrd_fusion_calls ------------------------------------
+# datavzrd v9.14.0 wrapper, fusion-calls template. Default target on the
+# fusions path (upstream rule all requests the fusions report when the group
+# calls fusions). Gated like the filtering fusions chain.
+[[rules]]
+name = "datavzrd_fusion_calls"
+description = "Render the interactive fusion call report (datavzrd v9.14.0 wrapper)"
+when = "wildcard.calling == \"fusions\" || wildcard.calling == \"variants,fusions\""
+input = [
+    "results/tables/{group}/{group}.some_id.fusions.joined.fdr-controlled.tsv",
+    "resources/datavzrd/fusion-calls-template.datavzrd.yaml",
+]
+output = ["results/datavzrd-report/all.some_id.fusions.fdr-controlled/index.html"]
+target = true
+shell = """
+python scripts/datavzrd.py resources/datavzrd/fusion-calls-template.datavzrd.yaml \
+  resources/datavzrd/fusion-calls.variables.json \
+  --output results/datavzrd-report/all.some_id.fusions.fdr-controlled --log {log}
+"""
+log = "logs/datavzrd_report/all.some_id.fusions.log"
 
 [rules.environment]
 conda = "envs/datavzrd.yaml"

@@ -1,7 +1,8 @@
 # Variant table generation (upstream workflow/rules/table.smk).
 #
 # Rule map (upstream rule -> this module):
-#   vembrane_table -> table::vembrane_table
+#   vembrane_table (calling_type=variants) -> table::vembrane_table
+#   vembrane_table (calling_type=fusions)  -> table::vembrane_table_fusions
 #
 # Deviations (details in README.md):
 #   * tsv_to_excel is not in the default path (tables.generate_excel is not
@@ -11,6 +12,13 @@
 #   * The vembrane expression/header are the exact 34 columns produced by
 #     get_vembrane_config with the default config (verified by simulation,
 #     see docs/table-columns.md).
+#   * The fusions twin is gated on the group's `calling` metadata like the
+#     filtering/calling fusions continuation (default calling="variants"
+#     keeps it SkippedByWhen). Its expression/header are the exact 23 columns
+#     produced by get_vembrane_config for calling_type=fusions with the
+#     default config: the ANN fields drop out (fusions records carry no ANN
+#     annotation) and INFO['EVENT'] drops out (it is consumed by
+#     create_fusions_table_per_group.py's mateid pairing, not shown).
 
 [workflow]
 name = "table"
@@ -31,6 +39,32 @@ vembrane table --wide --header \
   {input[0]} > {output} 2> {log}
 """
 log = "logs/vembrane-table/SRR702070_group.some_id.variants.log"
+
+[rules.environment]
+conda = "envs/vembrane.yaml"
+
+# ---- upstream rule: vembrane_table (calling_type=fusions) --------------------
+# get_vembrane_config for calling_type=fusions with the default config:
+# scenario events (somatic_tumor_low/medium/high, somatic_normal,
+# germline_hom, germline_het) -> 8 sorted prob columns; the ANN.* fields and
+# INFO['EVENT'] of the variants instance drop out (see module header). Alias
+# frozen to "tumor" (default sample metadata).
+[[rules]]
+name = "vembrane_table_fusions"
+description = "Render the fusions table with vembrane (vembrane table)"
+when = "wildcard.calling == \"fusions\" || wildcard.calling == \"variants,fusions\""
+input = [
+    "results/final-calls/{group}/{group}.some_id.fusions.fdr-controlled.normal-probs.bcf",
+    "results/scenarios/{group}.yaml",
+]
+output = ["results/tables/{group}/{group}.some_id.fusions.fdr-controlled.tsv"]
+shell = """
+vembrane table --wide --header \
+  "chromosome, position, reference allele, alternative allele, feature_name, feature_id, exon, prob: absent, prob: artifact, prob: germline_het, prob: germline_hom, prob: somatic_normal, prob: somatic_tumor_high, prob: somatic_tumor_low, prob: somatic_tumor_medium, tumor: allele frequency, tumor: allele frequency distribution, tumor: read depth, mateid, tumor: short ref observations, tumor: short alt observations, tumor: observations, id, end position" \
+  "CHROM, POS, REF, ALT, INFO['GENE_NAME'], INFO['GENE_ID'], INFO['EXON_NUMBER'][0], INFO['PROB_ABSENT'], INFO['PROB_ARTIFACT'], INFO['PROB_GERMLINE_HET'], INFO['PROB_GERMLINE_HOM'], INFO['PROB_SOMATIC_NORMAL'], INFO['PROB_SOMATIC_TUMOR_HIGH'], INFO['PROB_SOMATIC_TUMOR_LOW'], INFO['PROB_SOMATIC_TUMOR_MEDIUM'], FORMAT['AF']['tumor'], FORMAT['AFD']['tumor'], FORMAT['DP']['tumor'], INFO['MATEID'][0], FORMAT['SROBS']['tumor'], FORMAT['SAOBS']['tumor'], FORMAT['OBS']['tumor'], ID, INFO['END']" \
+  {input[0]} > {output} 2> {log}
+"""
+log = "logs/vembrane-table/{group}.some_id.fusions.log"
 
 [rules.environment]
 conda = "envs/vembrane.yaml"

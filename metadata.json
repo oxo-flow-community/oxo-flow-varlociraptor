@@ -95,6 +95,7 @@
     "coverage_table",
     "create_mutational_context_file",
     "datavzrd_coverage",
+    "datavzrd_fusion_calls",
     "datavzrd_variants_calls",
     "delly",
     "determine_coding_regions",
@@ -199,14 +200,16 @@
     "varlociraptor_preprocess_arriba",
     "varlociraptor_preprocess_delly",
     "varlociraptor_preprocess_freebayes",
-    "vembrane_table"
+    "vembrane_table",
+    "vembrane_table_fusions",
+    "process_fusion_call_tables",
+    "datavzrd_fusion_calls"
   ],
   "excluded": [
-    "fusions report and table exports (upstream datavzrd.smk: `datavzrd_fusion_calls` + `process_fusion_call_tables`; and the fusions instance of the single wildcard `vembrane_table` rule) — the ported fusions FDR-control chain (filtering.oxoflow) ends at the fdr-controlled/normal-probs callsets; the port's `vembrane_table` hardcodes the variants path, so the fusions table/report datasets are missing. `fusion_activate` is the port's config key (upstream gates on the `types: [\"variants\",\"fusions\"]` list). Note: upstream has no fusions oncoprint output — `get_oncoprint_input` is variants-only, so nothing to port there",
     "annotate_umis (upstream mapping.smk:77, UMI branch via umi_tools group) and splitncigarreads (upstream mapping.smk:173, RNA-datatype branch in get_recalibrate_quality_input) — now ported as gated rules (mapping.oxoflow): config.umi_read (empty default = UMI flow off, mirroring an empty upstream samples.tsv column) and config.datatype = \"rna\" (default \"dna\" keeps the DNA path). The remaining datatype branches of the upstream samples.tsv columns (e.g. long-read datatypes) stay unported — the port models DNA/RNA short-read data only.",
     "upstream testcase.smk debug module (`gather_observations` + `testcase`: varlociraptor call --testcase-prefix/--testcase-locus mode, results/testcases/) — now ported as the gated testcase.oxoflow module (config.testcase_activate + config.testcase_locus; opt-in like upstream, no rule-all consumer). (The upstream `bcf_to_vcf_gz`, `vg2svg` and `only_alignment` tools have no consumers/producers in the upstream tree at the pinned tag — dead tools, intentionally not ported)"
   ],
-  "rule_count": 176,
+  "rule_count": 179,
   "tools": [
     "altair",
     "arriba",
@@ -251,7 +254,7 @@
     "vembrane",
     "vg"
   ],
-  "description": "Scenario-driven somatic small and structural variant calling with Varlociraptor: paired-end reads are aligned against the 1000 Genomes human pangenome with vg giraffe, QC'd with FastQC/MultiQC, covered with mosdepth, and used for freebayes and delly candidate calling; Varlociraptor then estimates alignment properties and calls variants under a tumor scenario (events present + somatic_tumor_high + somatic_tumor_medium, FDR 0.05), FDR is controlled per variant type (SNV/INS/DEL/MNV/BND/INV/DUP/REP) with merge and phred decoding, and the calls are annotated with VEP (LoFtool/REVEL plugins) and dbSNFP/dbSNP, filtered, turned into a 34-column variant table with oncoprint label-sorting, and rendered as interactive datavzrd variant and gene-coverage reports. All reference data (GRCh38 FASTA and GTF, VEP cache/plugins, REVEL scores, known-variants VCFs, HPRC pangenome graph) is downloaded automatically into resources/.",
+  "description": "Scenario-driven somatic small and structural variant calling with Varlociraptor: paired-end reads are aligned against the 1000 Genomes human pangenome with vg giraffe, QC'd with FastQC/MultiQC, covered with mosdepth, and used for freebayes and delly candidate calling; Varlociraptor then estimates alignment properties and calls variants under a tumor scenario (events present + somatic_tumor_high + somatic_tumor_medium, FDR 0.05), FDR is controlled per variant type (SNV/INS/DEL/MNV/BND/INV/DUP/REP) with merge and phred decoding, and the calls are annotated with VEP (LoFtool/REVEL plugins) and dbSNFP/dbSNP, filtered, turned into a 34-column variant table (plus the fusions table joined with arriba annotations, when the group calls fusions) with oncoprint label-sorting, and rendered as interactive datavzrd variant, fusion-call and gene-coverage reports. All reference data (GRCh38 FASTA and GTF, VEP cache/plugins, REVEL scores, known-variants VCFs, HPRC pangenome graph) is downloaded automatically into resources/.",
   "installation": {
     "engine": "oxo-flow >= 0.12.0",
     "toolchain": "conda envs — pinned versions (no containers)",

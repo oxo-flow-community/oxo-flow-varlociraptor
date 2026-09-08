@@ -1,0 +1,161 @@
+__use_yte__: true
+
+name: ?f"Fusion calls {wildcards.event}"
+
+default-view: ?f"{params.groups[0]}-fusions"
+
+__definitions__:
+  - import os
+  - |
+    def make_inspect_link(alias):
+        return f"""
+          function link_obs(value, row) {{
+            const base = "https://varlociraptor.github.io/varlociraptor-inspect/";
+            const params = new URLSearchParams();
+            params.append(`OBS_{alias}`, value);
+            const afdKey = `{alias}: allele frequency distribution`;
+            if (row[afdKey] !== undefined && row[afdKey] !== null && row[afdKey] !== "") {{
+              const afdValue = row[afdKey].replace(/^\(|\)$/g, '').replace(/'/g, '').replace(/,\s+/g, ',');
+              if (afdValue && afdValue !== ".") {{
+                params.append(`AFD_{alias}`, afdValue);
+              }}
+            }}
+            Object.keys(row).forEach(key => {{
+              if (key.startsWith("prob: ")) {{
+                const event = "PROB_" + key.replace("prob: ", "").toUpperCase();
+                const prob = parseFloat(row[key]);
+                const phred = prob <= 0 ? Infinity : -10 * Math.log10(prob);
+                params.append(event, phred);
+              }}
+            }});
+            return `
+              <a
+                href="${{base}}?${{params}}"
+                target="_blank"
+                class="btn btn-sm btn-outline-secondary py-0 px-1"
+                title="Open in varlociraptor-inspect"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg"
+                     width="14"
+                     height="14"
+                     fill="currentColor"
+                     class="bi bi-bar-chart-fill"
+                     viewBox="0 0 16 16">
+                  <path d="M1 11a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1zm5-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1zm5-5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1z"/>
+                </svg>
+              </a>
+            `;
+          }}
+        """
+
+datasets:
+  ?for group, path in zip(params.groups, input.fusion_calls):
+    ?f"{group}-fusions":
+      path: ?path
+      separator: "\t"
+
+views:
+  ?for group in params.groups:
+    ?f"{group}-fusions":
+          desc: ?f"Fusion calls"
+          dataset: ?f"{group}-fusions"
+          render-table:
+            columns:
+              location_breakpoint_1:
+                link-to-url:
+                  ensembl:
+                    url: ?f"https://www.ensembl.org/{params.species}/Location/Overview?r={{value}}"
+                    new-window: true
+              ensembl_gene_id_breakpoint_1:
+                display-mode: detail
+                link-to-url:
+                  ensembl:
+                    url: ?f"https://www.ensembl.org/{params.species}/Gene/Summary?g={{value}}"
+                    new-window: true
+              ensembl_transcript_id_breakpoint_1:
+                display-mode: detail
+                link-to-url:
+                  ensembl:
+                    url: ?f"https://www.ensembl.org/{params.species}/Transcript/Summary?t={{value}}"
+                    new-window: true
+              gene_symbol_breakpoint_1:
+                link-to-url:
+                  gene_card:
+                    url: "https://www.genecards.org/cgi-bin/carddisp.pl?gene={value}"
+                    new-window: true
+              exon_breakpoint_1:
+                display-mode: detail
+              site_type_breakpoint_1:
+                plot:
+                  heatmap:
+                    type: nominal
+                    color-scheme: set1
+                    aux-domain-columns:
+                      - site_type_breakpoint_2
+              location_breakpoint_2:
+                link-to-url:
+                  ensembl:
+                    url: ?f"https://www.ensembl.org/{params.species}/Location/Overview?r={{value}}"
+                    new-window: true
+              ensembl_gene_id_breakpoint_2:
+                display-mode: detail
+                link-to-url:
+                  ensembl:
+                    url: ?f"https://www.ensembl.org/{params.species}/Gene/Summary?g={{value}}"
+                    new-window: true
+              ensembl_transcript_id_breakpoint_2:
+                display-mode: detail
+                link-to-url:
+                  ensembl:
+                    url: ?f"https://www.ensembl.org/{params.species}/Transcript/Summary?t={{value}}"
+                    new-window: true
+              gene_symbol_breakpoint_2:
+                link-to-url:
+                  gene_card:
+                    url: "https://www.genecards.org/cgi-bin/carddisp.pl?gene={value}"
+                    new-window: true
+              exon_breakpoint_2:
+                display-mode: detail
+              site_type_breakpoint_2:
+                plot:
+                  heatmap:
+                    type: nominal
+                    color-scheme: set1
+                    aux-domain-columns:
+                      - site_type_breakpoint_1
+              fusion_type:
+                plot:
+                  heatmap:
+                    type: nominal
+                    color-scheme: category10
+              resulting_reading_frame:
+                plot:
+                  heatmap:
+                    type: nominal
+                    color-scheme: dark2
+              "regex('.+: allele frequency')":
+                plot:
+                  ticks:
+                    scale: "linear"
+                    domain: [0.0, 1.0]
+                    aux-domain-columns:
+                      - "regex('.+: allele frequency')"
+              "regex('.+: read depth')":
+                plot:
+                  ticks:
+                    scale: "linear"
+                    aux-domain-columns:
+                      - "regex('.+: read depth')"
+              "regex('prob: .+')":
+                plot:
+                  heatmap:
+                    scale: linear
+                    domain: [0.0, 1.0]
+                    range:
+                      - white
+                      - "#1f77b4"
+              ?for alias in params.samples.loc[params.samples["group"] == group, "alias"]:
+                '?f"{alias}: observations"':
+                  optional: true
+                  custom: ?make_inspect_link(alias)
+                  display-mode: normal
