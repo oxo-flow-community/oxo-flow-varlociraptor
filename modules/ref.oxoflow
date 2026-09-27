@@ -135,7 +135,7 @@ when = "!config.skip_ref_downloads"
 output = ["resources/vep/plugins/.plugins_complete"]
 shell = """
 mkdir -p resources/vep/plugins && \
-python scripts/download_vep_plugins.py 111 resources/vep/plugins 2> {log} && \
+python scripts/download_vep_plugins.py --release 111 --output resources/vep/plugins --log {log} && \
 touch resources/vep/plugins/.plugins_complete
 """
 log = "logs/vep/plugins.log"
