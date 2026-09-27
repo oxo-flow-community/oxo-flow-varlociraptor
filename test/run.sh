@@ -13,8 +13,12 @@ echo "==> lint (warnings are acceptable, errors are not)"
 
 echo "==> dry-run with default config"
 # oxo-flow v0.11.0 prints the plan to stderr; capture both streams
+# Engine headline wording changed in oxo-flow 0.20.1 (Traitome/oxo-flow#432):
+# the old "DAG: (dry-run) N rules would execute" became
+# "Plan: would run: N | skip: M | completed: K". Accept either so CI passes
+# with both the latest release and older pins.
 "$OXO" dry-run main.oxoflow --samples first:1 > /tmp/oxo-dryrun-$$.txt 2>&1
-grep -q "would execute" /tmp/oxo-dryrun-$$.txt
+grep -qE "would (execute|run)" /tmp/oxo-dryrun-$$.txt
 
 echo "==> debug: expanded commands contain no literal {wildcards} ({log} stays literal)"
 "$OXO" debug main.oxoflow 2>&1 | grep -E '\{(config\.|sample\}|group\}|input\[|output\[|threads\}|memory\})' && { echo "unexpanded wildcards in debug output"; exit 1; } || true
