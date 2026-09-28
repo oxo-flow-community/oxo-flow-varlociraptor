@@ -22,6 +22,12 @@
 #   * VEP cache/plugin directories are represented by marker files
 #     (resources/vep/cache/.cache_complete, resources/vep/plugins/.plugins_complete).
 #   * vep_install --CACHEURL points at the tarball's directory as upstream.
+#   * All download rules use a resumable retry loop (curl -C - into a .part
+#     file, decompress/move only after a curl success). Upstream pipes curl
+#     straight into gzip/tar — a single network hiccup or a throughput cap
+#     (e.g. ~/.curlrc --max-time) loses the whole transfer and any partial
+#     progress; the .part file survives failures so retries grow it
+#     monotonically until the download converges.
 
 [workflow]
 name = "ref"
@@ -31,11 +37,16 @@ name = "ref"
 # 111 (the upstream toplevel fallback is dropped together with the FTP path).
 [[rules]]
 name = "get_genome"
-description = "Download GRCh38 primary assembly FASTA from Ensembl release 111 (ensembl-sequence v7.3.0)"
+description = "Download GRCh38 primary assembly FASTA from Ensembl release 111 (ensembl-sequence v7.3.0, resumable retry)"
 when = "!config.skip_ref_downloads"
 output = ["resources/genome.dna.homo_sapiens.GRCh38.111.fasta"]
 shell = """
-(curl -L https://ftp.ensembl.org/pub/release-111/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz | gzip -d > {output}) 2> {log}
+(for i in $(seq 1 100); do \
+  curl -fL -C - --connect-timeout 30 -o {output}.part https://ftp.ensembl.org/pub/release-111/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz && break; \
+  echo "retry $i: curl failed, resuming" >&2; sleep 5; \
+done && \
+gzip -dc {output}.part > {output} && \
+rm -f {output}.part) 2> {log}
 """
 log = "logs/get-genome.log"
 
@@ -70,21 +81,25 @@ conda = "envs/samtools.yaml"
 # ---- upstream rule: get_known_variants ------------------------------------
 # ensembl-variation v7.5.0 wrapper: 25 per-chromosome VCFs (1-22, X, Y, MT),
 # concatenated with bcftools concat -Oz --naive and reheadered to the
-# reference FASTA contigs.
+# reference FASTA contigs. Each per-chromosome download resumes across
+# retries (chr1 alone is >1 GB).
 [[rules]]
 name = "get_known_variants"
-description = "Download Ensembl release 111 known variants (ensembl-variation v7.5.0 wrapper)"
+description = "Download Ensembl release 111 known variants (ensembl-variation v7.5.0 wrapper, resumable retry)"
 when = "!config.skip_ref_downloads"
 input = ["resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai"]
 output = ["resources/variation.vcf.gz"]
 shell = """
-tmpdir=$(mktemp -d) && \
+(tmpdir=$(mktemp -d) && \
 for chrom in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 X Y MT; do \
-  curl -fsSL -o "$tmpdir/homo_sapiens-chr${chrom}.vcf.gz" "https://ftp.ensembl.org/pub/release-111/variation/vcf/homo_sapiens/homo_sapiens-chr${chrom}.vcf.gz" || exit 1; \
+  for i in $(seq 1 100); do \
+    curl -fsSL -C - --connect-timeout 30 -o "$tmpdir/homo_sapiens-chr${chrom}.vcf.gz" "https://ftp.ensembl.org/pub/release-111/variation/vcf/homo_sapiens/homo_sapiens-chr${chrom}.vcf.gz" && break; \
+    echo "retry $i (chr$chrom): curl failed, resuming" >&2; sleep 5; \
+  done; \
 done && \
 bcftools concat -Oz --naive "$tmpdir"/homo_sapiens-chr*.vcf.gz > "$tmpdir/concat.vcf.gz" && \
 bcftools reheader --fai {input} "$tmpdir/concat.vcf.gz" > {output} && \
-rm -rf "$tmpdir"
+rm -rf "$tmpdir") 2> {log}
 """
 log = "logs/get-known-variants.log"
 
@@ -105,20 +120,24 @@ conda = "envs/rbt.yaml"
 
 # ---- upstream rule: get_vep_cache -----------------------------------------
 # vep cache v8.0.0 wrapper (indexed cache tarball, https only). The upstream
-# directory output is represented by a marker file.
+# directory output is represented by a marker file. The tarball download
+# resumes across retries; gzip -t validates integrity before install.
 [[rules]]
 name = "get_vep_cache"
-description = "Download and install the VEP cache (vep cache v8.0.0 wrapper)"
+description = "Download and install the VEP cache (vep cache v8.0.0 wrapper, resumable retry)"
 when = "!config.skip_ref_downloads"
 output = ["resources/vep/cache/.cache_complete"]
 shell = """
-mkdir -p resources/vep/cache && \
+(mkdir -p resources/vep/cache && \
 tmpdir=$(mktemp -d) && \
-curl --fail -L https://ftp.ensembl.org/pub/release-111/variation/indexed_vep_cache/homo_sapiens_vep_111_GRCh38.tar.gz -o "$tmpdir/homo_sapiens_vep_111_GRCh38.tar.gz" && \
+for i in $(seq 1 100); do \
+  curl --fail -L -C - --connect-timeout 30 -o "$tmpdir/homo_sapiens_vep_111_GRCh38.tar.gz" https://ftp.ensembl.org/pub/release-111/variation/indexed_vep_cache/homo_sapiens_vep_111_GRCh38.tar.gz && break; \
+  echo "retry $i: curl failed, resuming" >&2; sleep 5; \
+done && \
 gzip -t "$tmpdir/homo_sapiens_vep_111_GRCh38.tar.gz" && \
 vep_install --AUTO c --SPECIES homo_sapiens --ASSEMBLY GRCh38 --CACHE_VERSION 111 --CACHEURL "$tmpdir" --CACHEDIR resources/vep/cache --NO_UPDATE && \
 rm -rf "$tmpdir" && \
-touch resources/vep/cache/.cache_complete
+touch resources/vep/cache/.cache_complete) 2> {log}
 """
 log = "logs/vep/cache.log"
 
@@ -146,10 +165,16 @@ conda = "envs/vep_plugins.yaml"
 # ---- upstream rule: get_pangenome -----------------------------------------
 [[rules]]
 name = "get_pangenome"
-description = "Download the HPRC v1.1 pangenome graph (hprc-v1.1-mc-grch38.d9.gbz)"
+description = "Download the HPRC v1.1 pangenome graph (hprc-v1.1-mc-grch38.d9.gbz, resumable retry)"
 when = "!config.skip_ref_downloads"
 output = ["resources/pangenome.homo_sapiens.GRCh38.gbz"]
-shell = "curl -fSL -o {output} https://s3-us-west-2.amazonaws.com/human-pangenomics/pangenomes/freeze/freeze1/minigraph-cactus/hprc-v1.1-mc-grch38/hprc-v1.1-mc-grch38.d9.gbz 2> {log}"
+shell = """
+(for i in $(seq 1 100); do \
+  curl -fL -C - --connect-timeout 30 -o {output}.part https://s3-us-west-2.amazonaws.com/human-pangenomics/pangenomes/freeze/freeze1/minigraph-cactus/hprc-v1.1-mc-grch38/hprc-v1.1-mc-grch38.d9.gbz && break; \
+  echo "retry $i: curl failed, resuming" >&2; sleep 5; \
+done && \
+mv {output}.part {output}) 2> {log}
+"""
 log = "logs/get_pangenome.log"
 
 [rules.environment]
@@ -199,13 +224,20 @@ log = "logs/reference/paths.log"
 conda = "envs/vg.yaml"
 
 # ---- upstream rule: get_annotation ----------------------------------------
-# ensembl-annotation v7.5.0 wrapper.
+# ensembl-annotation v7.5.0 wrapper (resumable retry).
 [[rules]]
 name = "get_annotation"
-description = "Download the Ensembl release 111 GTF annotation (ensembl-annotation v7.5.0 wrapper)"
+description = "Download the Ensembl release 111 GTF annotation (ensembl-annotation v7.5.0 wrapper, resumable retry)"
 when = "!config.skip_ref_downloads"
 output = ["resources/annotation.gtf"]
-shell = "(curl --fail -L https://ftp.ensembl.org/pub/release-111/gtf/homo_sapiens/Homo_sapiens.GRCh38.111.gtf.gz | gzip -d > {output}) 2> {log}"
+shell = """
+(for i in $(seq 1 100); do \
+  curl -fL -C - --connect-timeout 30 -o {output}.part https://ftp.ensembl.org/pub/release-111/gtf/homo_sapiens/Homo_sapiens.GRCh38.111.gtf.gz && break; \
+  echo "retry $i: curl failed, resuming" >&2; sleep 5; \
+done && \
+gzip -dc {output}.part > {output} && \
+rm -f {output}.part) 2> {log}
+"""
 log = "logs/get_annotation.log"
 
 [rules.environment]
@@ -224,12 +256,20 @@ log = "logs/plot_coverage/transform_gene_regions.log"
 conda = "envs/pystats.yaml"
 
 # ---- upstream rule: download_revel ----------------------------------------
+# --fail added: without it a Zenodo error page would be written into the
+# output. Resumable retry as above.
 [[rules]]
 name = "download_revel"
-description = "Download REVEL scores from Zenodo (revel-v1.3_all_chromosomes.zip)"
+description = "Download REVEL scores from Zenodo (revel-v1.3_all_chromosomes.zip, resumable retry)"
 when = "!config.skip_ref_downloads"
 output = ["resources/revel_scores.zip"]
-shell = "curl https://zenodo.org/records/7072866/files/revel-v1.3_all_chromosomes.zip -o {output} &> {log}"
+shell = """
+(for i in $(seq 1 100); do \
+  curl -fL -C - --connect-timeout 30 -o {output}.part https://zenodo.org/records/7072866/files/revel-v1.3_all_chromosomes.zip && break; \
+  echo "retry $i: curl failed, resuming" >&2; sleep 5; \
+done && \
+mv {output}.part {output}) 2> {log}
+"""
 log = "logs/vep_plugins/download_revel.log"
 
 [rules.environment]
