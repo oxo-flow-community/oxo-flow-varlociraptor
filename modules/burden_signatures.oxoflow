@@ -9,7 +9,7 @@
 #   estimate_mutational_burden      -> burden_signatures::estimate_mutational_burden_{curve,hist}
 #   create_mutational_context_file  -> burden_signatures::create_mutational_context_file
 #                                      (scripts/create_mutational_context.py)
-#   download_cosmic_signatures      -> burden_signatures::download_cosmic_signatures (curl)
+#   download_cosmic_signatures      -> burden_signatures::download_cosmic_signatures (curl, resumable retry)
 #   annotate_mutational_signatures  -> burden_signatures::annotate_mutational_signatures
 #                                      (scripts/annotate_mutational_signatures.R)
 #   join_mutational_signatures      -> burden_signatures::join_mutational_signatures (cat)
@@ -175,10 +175,16 @@ conda = "envs/pystats.yaml"
 # ---- upstream rule: download_cosmic_signatures ------------------------------
 [[rules]]
 name = "download_cosmic_signatures"
-description = "Download the COSMIC v3.4 SBS signatures (curl)"
+description = "Download the COSMIC v3.4 SBS signatures (curl, resumable retry)"
 when = "config.mutational_signatures_activate"
 output = ["resources/cosmic_signatures.txt"]
-shell = "curl https://cog.sanger.ac.uk/cosmic-signatures-production/documents/COSMIC_v3.4_SBS_GRCh38.txt -o {output} &> {log}"
+shell = """
+(for i in $(seq 1 100); do \
+  curl -fL -C - --connect-timeout 30 -o {output}.part https://cog.sanger.ac.uk/cosmic-signatures-production/documents/COSMIC_v3.4_SBS_GRCh38.txt && break; \
+  echo "retry $i: curl failed, resuming" >&2; sleep 5; \
+done && \
+mv {output}.part {output}) &> {log}
+"""
 log = "logs/mutational_signatures/download_cosmic.log"
 
 [rules.environment]

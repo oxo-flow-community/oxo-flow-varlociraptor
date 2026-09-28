@@ -33,6 +33,10 @@
 #     themselves land in resources/benchmarking/chm-eval-kit/ as upstream.
 #   * targets of rename_chromosomes freeze to chr0..chr22,chrX,chrY
 #     (upstream: ",".join(chr0..chr22 + chrX + chrY) via range(23)).
+#   * chm_eval_sample and chm_eval_kit download through the same resumable
+#     retry loop as the ref module (curl -C - into a .part file; the kit
+#     tarball is fetched to a file before extraction instead of a curl|tar
+#     pipe, so retries resume instead of restarting).
 
 [workflow]
 name = "benchmarking"
@@ -64,8 +68,12 @@ description = "Download the CHM1/CHM13 hybrid alignment from EBI (13 GB) and ind
 when = "config.benchmarking_activate"
 output = ["resources/chm.bam"]
 shell = """
-(curl -L ftp://ftp.sra.ebi.ac.uk/vol1/run/ERR134/ERR1341796/CHM1_CHM13_2.bam > {output}
- samtools index {output}) 2> {log}
+(for i in $(seq 1 100); do \
+  curl -fL -C - --connect-timeout 30 -o {output}.part ftp://ftp.sra.ebi.ac.uk/vol1/run/ERR134/ERR1341796/CHM1_CHM13_2.bam && break; \
+  echo "retry $i: curl failed, resuming" >&2; sleep 5; \
+done && \
+mv {output}.part {output} && \
+samtools index {output}) 2> {log}
 """
 log = "logs/benchmarking/chm-eval-sample.log"
 
@@ -122,9 +130,14 @@ when = "config.benchmarking_activate"
 output = ["resources/benchmarking/chm-eval-kit/.kit_complete"]
 shell = """
 (mkdir -p resources/benchmarking/chm-eval-kit && \
- curl -L https://github.com/lh3/CHM-eval/releases/download/v0.5/CHM-evalkit-20180222.tar \
-   | tar --strip-components 1 -C resources/benchmarking/chm-eval-kit -xf - && \
- (cd resources/benchmarking/chm-eval-kit; chmod +x htsbox run-eval k8) && \
+ kitdir=resources/benchmarking/chm-eval-kit && \
+ for i in $(seq 1 100); do \
+   curl -fL -C - --connect-timeout 30 -o "$kitdir/.kit.tar.part" https://github.com/lh3/CHM-eval/releases/download/v0.5/CHM-evalkit-20180222.tar && break; \
+   echo "retry $i: curl failed, resuming" >&2; sleep 5; \
+ done && \
+ tar --strip-components 1 -C "$kitdir" -xf "$kitdir/.kit.tar.part" && \
+ rm -f "$kitdir/.kit.tar.part" && \
+ (cd "$kitdir"; chmod +x htsbox run-eval k8) && \
  touch {output}) 2> {log}
 """
 log = "logs/benchmarking/chm-eval-kit.log"
