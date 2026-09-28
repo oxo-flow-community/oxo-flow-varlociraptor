@@ -1,10 +1,13 @@
 # Ensembl reference downloads (ensembl-variation v7.5.0 wrapper, curl +
 # bcftools for the known-variants concatenation).
+# NOTE: curl pinned to a modern build — the original curl=7.86.0 pin is no
+# longer co-installable with bioconda bcftools 1.22 (its htslib requires
+# libcurl >=8.14, conflicting with the frozen libcurl 7.86.0 builds).
 name: ensembl
 channels:
   - conda-forge
   - bioconda
 dependencies:
-  - conda-forge::curl=7.86.0
+  - conda-forge::curl
   - ca-certificates
   - bioconda::bcftools=1.22
