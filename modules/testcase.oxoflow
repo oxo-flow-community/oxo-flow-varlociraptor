@@ -1,6 +1,9 @@
 # Testcase rendering branch (upstream workflow/rules/testcase.smk, gated on
 # upstream `debug` usage — upstream has no rule-all consumer for these rules,
-# so they are opt-in only).
+# so they are opt-in only, but they ARE targets: an oxo-flow plan is the
+# backward closure of target=true rules, so without target=true these rules
+# never join the plan even when testcase_activate is true (upstream schedules
+# them via rule-all/target file semantics).
 #
 # Upstream gathers the per-scatteritem observation chunks of a group into one
 # BCF (bcftools concat v2.3.2 wrapper) and renders a varlociraptor testcase
@@ -76,6 +79,7 @@ conda = "envs/bcftools.yaml"
 [[rules]]
 name = "testcase_freebayes"
 description = "Render the freebayes varlociraptor testcase (varlociraptor call --testcase-prefix)"
+target = true
 when = "config.testcase_activate"
 input = [
     "results/observations/freebayes/SRR702070_group/SRR702070.all.bcf",
@@ -101,6 +105,7 @@ conda = "envs/varlociraptor.yaml"
 [[rules]]
 name = "testcase_delly"
 description = "Render the delly testcase (varlociraptor call --testcase-prefix)"
+target = true
 when = "config.testcase_activate"
 input = [
     "results/observations/delly/SRR702070_group/SRR702070.all.bcf",

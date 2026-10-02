@@ -104,6 +104,27 @@ log = "logs/bcf-index/calls/vep_annotated/SRR702070_group/SRR702070_group.varian
 [rules.environment]
 conda = "envs/bcftools.yaml"
 
+# ---- upstream rule: bcf_index (db_annotated calls, generic fallback) --------
+# Upstream serves the selected callset's .csi via `use rule bcf_index as
+# annotated_index with: group: "annotation"` + `ruleorder: annotated_index >
+# bcf_index` (annotation.smk:110-112): the alias covers the population/burden
+# branch (ported as population::annotated_index), the generic bcf_index keeps
+# the default path alive. The port mirrors the pair with complementing
+# when-gates so exactly one producer of the selected callset's csi is
+# scheduled in every configuration; without this fallback the default plan
+# kills filter_by_annotation and the whole downstream variants arm.
+[[rules]]
+name = "bcf_index_db_annotated"
+description = "Index the selected annotated callset (bcftools index; fallback for the population/burden-gated population::annotated_index)"
+when = "!(config.population_db_activate || config.mutational_burden_activate)"
+input = ["results/calls/{config.annotation_selection}/SRR702070_group/SRR702070_group.variants.0.bcf"]
+output = ["results/calls/{config.annotation_selection}/SRR702070_group/SRR702070_group.variants.0.bcf.csi"]
+shell = "bcftools index {input} 2> {log}"
+log = "logs/bcf-index/db_annotated/SRR702070_group/SRR702070_group.variants.0.log"
+
+[rules.environment]
+conda = "envs/bcftools.yaml"
+
 # ---- upstream rule: annotate_dgidb ------------------------------------------
 # rbt vcf-annotate-dgidb over the db_annotated callset (upstream
 # get_annotate_dgidb_input: db_annotated while annotations/vcfs is active;
