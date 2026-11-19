@@ -18,6 +18,6 @@
     "batch": "all"
   },
   "input": {
-    "fusion_calls": ["results/tables/SRR702070_group/SRR702070_group.some_id.fusions.joined.fdr-controlled.tsv"]
+    "fusion_calls": ["results/tables/SRR702070_group/SRR702070_group.some_id.fusions.joined.fdr-controlled.parquet"]
   }
 }

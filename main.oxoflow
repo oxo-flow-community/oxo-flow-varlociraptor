@@ -1,7 +1,7 @@
 # oxo-flow-varlociraptor
 #
 # Small and structural variant calling with Varlociraptor.
-# oxo-flow port of snakemake-workflows/dna-seq-varlociraptor v6.10.0
+# oxo-flow port of snakemake-workflows/dna-seq-varlociraptor v6.11.4
 # (https://github.com/snakemake-workflows/dna-seq-varlociraptor, MIT).
 #
 # Scope: the default-parameter execution path for one tumor sample group
@@ -18,7 +18,7 @@
 
 [workflow]
 name = "oxo-flow-varlociraptor"
-description = "Small and structural variant calling with Varlociraptor (port of snakemake-workflows/dna-seq-varlociraptor v6.10.0)"
+description = "Small and structural variant calling with Varlociraptor (port of snakemake-workflows/dna-seq-varlociraptor v6.11.4)"
 [config]
 # Path to the raw paired-end FASTQs of the single sample (upstream
 # config/units.tsv points at absolute /projects/... paths; the port reads
@@ -113,6 +113,20 @@ annotation_selection = "db_annotated"
 # upstream config: params/freebayes — the min-alternate-count for candidate
 # calling (2, or 1 when calc_consensus_reads is active).
 freebayes_min_alternate_count = 2
+
+# upstream config: params/freebayes/use_best_n_alleles (v6.11.0) — optional
+# cap of alleles considered by freebayes (--use-best-n-alleles N). Empty =
+# upstream unset = freebayes' own all-alleles default (the upstream
+# get_freebayes_use_best_n_alleles() returns "" and the candidate_calling
+# rules splice the flag in only when non-empty).
+freebayes_use_best_n_alleles = ""
+
+# upstream config: calling/atomize (v6.11.1) — when on, the freebayes
+# candidate calls are atomized (bcftools norm --atomize + sort in
+# candidate_calling::freebayes_atomize/_sort) and the freebayes preprocess
+# step runs with --atomic-candidate-variants; the exclusive when-gated twins
+# in candidate_calling/calling model the switch (see those modules).
+calling_atomize = false
 
 # upstream config: params/picard/MarkDuplicates + get_markduplicates_extra —
 # extra MarkDuplicates arguments (upstream adds

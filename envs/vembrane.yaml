@@ -1,8 +1,9 @@
-# vembrane — pinned exactly to the upstream envs/vembrane.yaml.
+# vembrane — pinned to the upstream envs/vembrane.yaml (v6.11.4:
+# vembrane 2.6.1, with parquet table output support).
 name: vembrane
 channels:
   - conda-forge
   - bioconda
 dependencies:
-  - bioconda::vembrane=2.4.0
+  - bioconda::vembrane=2.6.1
   - bioconda::bcftools=1.22

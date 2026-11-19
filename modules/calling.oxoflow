@@ -4,6 +4,9 @@
 #   render_scenario          -> calling::render_scenario
 #   varlociraptor_alignment_properties -> calling::varlociraptor_alignment_properties
 #   varlociraptor_preprocess  -> calling::varlociraptor_preprocess_{freebayes,delly}
+#                                (+ ::varlociraptor_preprocess_freebayes_atomized
+#                                 twin for the --atomic-candidate-variants
+#                                 calling/atomize branch, v6.11.3)
 #   varlociraptor_call        -> calling::varlociraptor_call_{freebayes,delly}
 #   sort_calls                -> calling::sort_calls_{freebayes,delly}
 #                                (bcftools sort v2.6.0 wrapper, mem 8000)
@@ -66,9 +69,15 @@ log = "logs/varlociraptor/alignment-properties/SRR702070_group/SRR702070.log"
 conda = "envs/varlociraptor.yaml"
 
 # ---- upstream rule: varlociraptor_preprocess (freebayes) -------------------
+# extra = get_varlociraptor_params("preprocess"): the frozen upstream default
+# params/varlociraptor/preprocess ("--max-depth 200") plus, since v6.11.3,
+# "--atomic-candidate-variants" when calling/atomize is on. The port models
+# that switch as exclusive when-gated twins sharing the output (the same
+# idiom as the consensus BQSR twins in consensus.oxoflow).
 [[rules]]
 name = "varlociraptor_preprocess_freebayes"
 description = "Preprocess observations from freebayes candidates (--max-depth 200)"
+when = "!config.calling_atomize"
 input = [
     "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
     "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
@@ -83,6 +92,28 @@ varlociraptor preprocess variants --candidates {input[2]} --max-depth 200 \
   --alignment-properties {input[5]} {input[0]} --bam {input[3]} --output {output} 2> {log}
 """
 log = "logs/varlociraptor/preprocess/SRR702070_group/SRR702070.freebayes.0.log"
+
+[rules.environment]
+conda = "envs/varlociraptor.yaml"
+
+[[rules]]
+name = "varlociraptor_preprocess_freebayes_atomized"
+description = "Preprocess observations from freebayes candidates (--max-depth 200 --atomic-candidate-variants, calling/atomize branch)"
+when = "config.calling_atomize"
+input = [
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+    "results/candidate-calls/freebayes/filtered/SRR702070_group/SRR702070_group.0.bcf",
+    "results/recal/SRR702070.bam",
+    "results/recal/SRR702070.bai",
+    "results/alignment-properties/SRR702070_group/SRR702070.json",
+]
+output = ["results/observations/freebayes/SRR702070_group/SRR702070.0.bcf"]
+shell = """
+varlociraptor preprocess variants --candidates {input[2]} --max-depth 200 --atomic-candidate-variants \
+  --alignment-properties {input[5]} {input[0]} --bam {input[3]} --output {output} 2> {log}
+"""
+log = "logs/varlociraptor/preprocess/SRR702070_group/SRR702070.freebayes.0.atomized.log"
 
 [rules.environment]
 conda = "envs/varlociraptor.yaml"
@@ -110,7 +141,8 @@ log = "logs/varlociraptor/preprocess/SRR702070_group/SRR702070.delly.0.log"
 conda = "envs/varlociraptor.yaml"
 
 # ---- upstream rule: varlociraptor_call (freebayes) -------------------------
-# generic calling, -o /dev/stdout, output redirected (infer_genotypes false).
+# generic calling, output redirected (infer_genotypes false). Upstream v6.11.1
+# dropped the old "-o /dev/stdout" workaround from the call extra.
 [[rules]]
 name = "varlociraptor_call_freebayes"
 description = "Call variants with Varlociraptor from freebayes observations"
@@ -120,7 +152,7 @@ input = [
 ]
 output = ["results/calls/varlociraptor/freebayes/SRR702070_group/SRR702070_group.0.unsorted.bcf"]
 shell = """
-(varlociraptor call variants -o /dev/stdout generic \
+(varlociraptor call variants generic \
   --obs tumor=results/observations/freebayes/SRR702070_group/SRR702070.0.bcf \
   --scenario {input[1]} > {output}) 2> {log}
 """
@@ -139,7 +171,7 @@ input = [
 ]
 output = ["results/calls/varlociraptor/delly/SRR702070_group/SRR702070_group.0.unsorted.bcf"]
 shell = """
-(varlociraptor call variants -o /dev/stdout generic \
+(varlociraptor call variants generic \
   --obs tumor=results/observations/delly/SRR702070_group/SRR702070.0.bcf \
   --scenario {input[1]} > {output}) 2> {log}
 """
@@ -267,7 +299,7 @@ input = [
 ]
 output = ["results/calls/varlociraptor/arriba/{group}/{group}.0.unsorted.bcf"]
 shell = """
-(varlociraptor call variants --propagate-info-fields GENE_NAME GENE_ID EXON_NUMBER -o /dev/stdout generic \
+(varlociraptor call variants --propagate-info-fields GENE_NAME GENE_ID EXON_NUMBER generic \
   --obs tumor=results/observations/arriba/{group}/{sample}.0.bcf \
   --scenario {input[1]} > {output}) 2> {log}
 """

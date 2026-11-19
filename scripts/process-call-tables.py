@@ -1,13 +1,16 @@
 """Postprocess the vembrane variants table for the datavzrd report.
 
 Port of the upstream workflow/scripts/process-call-tables.py (MIT,
-snakemake-workflows dna-seq-varlociraptor v6.10.0), adapted to argv:
-  process-call-tables.py CALLS.tsv --output OUT.tsv --sorting '[...]' --log LOG
+snakemake-workflows dna-seq-varlociraptor v6.11.4), adapted to argv:
+  process-call-tables.py CALLS.parquet --output OUT.parquet --sorting '[...]' --log LOG
 
 The population-db annotation is not ported (population db is not activated in
 the default config). The script keeps the upstream column semantics:
-canonical/ManE+Clinical transcript rows, probability column cleanup, VAF
-binning, and float formatting.
+canonical/ManE+Clinical transcript rows, probability column cleanup and VAF
+binning. The call tables are parquet since upstream v6.11.0 (list-valued
+vembrane columns need no TSV string encoding anymore; the float formatting
+pre-pass of v6.10.0 was dropped upstream in the same step — the report
+applies per-column display precision instead).
 """
 
 import argparse
@@ -28,17 +31,7 @@ def write(df, path):
         remaining_columns.extend(["revel", "hgvsp", "symbol", "hgvsc", "hgvsg"])
         remaining_columns = [col for col in df.columns if col in remaining_columns]
         df = df[remaining_columns]
-    df.to_csv(path, index=False, sep="\t")
-
-
-def format_floats(df):
-    for col_name in df:
-        if issubclass(df[col_name].dtype.type, np.floating):
-            df[col_name] = [
-                "{:.2e}".format(x) if x < 0.1 and x > 0 else round(x, 2)
-                for x in df[col_name]
-            ]
-    return df
+    df.to_parquet(path, index=False)
 
 
 def drop_cols_by_predicate(df, columns, predicate):
@@ -129,7 +122,6 @@ def cleanup_dataframe(df):
     df = drop_low_prob_cols(df)
     df = reorder_prob_cols(df)
     df = reorder_vaf_cols(df)
-    df = format_floats(df)
     return df
 
 
@@ -146,7 +138,7 @@ def bin_max_vaf(df, samples):
 
 
 def select_spliceai_effect(calls):
-    spliceai_columns = calls.filter(like="spliceai", axis=1)
+    spliceai_columns = calls.filter(regex="^spliceai ", axis=1)
     max_spliceai_effects = (
         spliceai_columns.idxmax(axis=1).astype(str).str.removeprefix("spliceai ") + ": "
     )
@@ -154,7 +146,7 @@ def select_spliceai_effect(calls):
     # Do not annotate effect for variants with high uncertainty (prob below 0.2)
     max_spliceai_effects[max_score < 0.2] = np.nan
     col_index = calls.columns.get_loc("spliceai acceptor gain")
-    calls = calls.drop(calls.filter(like="spliceai", axis=1).columns, axis=1)
+    calls = calls.drop(spliceai_columns.columns, axis=1)
     calls.insert(col_index, "spliceai_effect", max_spliceai_effects)
     calls.insert(col_index, "spliceai", max_score)
     return calls
@@ -162,8 +154,8 @@ def select_spliceai_effect(calls):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("calls", help="Input variants table TSV (vembrane output)")
-    parser.add_argument("--output", required=True, help="Output TSV")
+    parser.add_argument("calls", help="Input variants table parquet (vembrane output)")
+    parser.add_argument("--output", required=True, help="Output parquet")
     parser.add_argument("--sorting", required=True, help="JSON list of columns to sort by")
     parser.add_argument("--log", required=True, help="Log file (stderr redirect)")
     args = parser.parse_args()
@@ -173,29 +165,32 @@ def main():
 
     sorting = json.loads(args.sorting)
 
-    calls = pd.read_csv(
-        args.calls,
-        sep="\t",
-        # The default pandas `NaN` value `NA` is a valid REF allele that we have seen
-        # in the wild, so we have to protect against mis-parsing things as `nan` here.
-        keep_default_na=False,
-        # Also, vembrane table as the tool producing the input seems to encode actual
-        # `NA` values as empty column entries or `None` values, based on tests. So only
-        # the empty string and `None` should be considered here.
-        na_values=["", "None"],
-    )
+    calls = pd.read_parquet(args.calls)
     calls["clinical significance"] = (
         calls["clinical significance"]
-        .apply(eval)
         .apply(sorted)
         .apply(",".join)
-        .replace("", np.nan)
     )
-    calls["consequence"] = calls["consequence"].apply(lambda value: value.replace("_", " "))
+    calls["consequence"] = calls["consequence"].apply(sorted).apply(",".join).apply(lambda value: value.replace("_", " "))
+
+    # format AFD columns
+    for col in calls.columns:
+        if col.endswith(": allele frequency distribution"):
+            calls[col] = calls[col].apply(",".join)
 
     calls["protein alteration (short)"] = (
-        calls["protein alteration (short)"].apply(eval).apply("/".join).replace("", np.nan)
+        calls["protein alteration (short)"].apply("/".join)
     )
+
+    # join any other list-valued column (e.g. a multi-valued VEP field requested
+    # via tables/output/annotation_fields)
+    for col in calls.columns:
+        if calls[col].map(lambda value: isinstance(value, np.ndarray)).any():
+            calls[col] = calls[col].apply(
+                lambda value: (
+                    ",".join(map(str, value)) if isinstance(value, np.ndarray) else value
+                )
+            )
 
     samples = get_samples(calls)
 
@@ -212,7 +207,7 @@ def main():
 
     calls.set_index("gene", inplace=True, drop=False)
 
-    if calls.columns.str.startswith("spliceai").any():
+    if calls.columns.str.startswith("spliceai ").any():
         calls = select_spliceai_effect(calls)
 
     canonical = calls["canonical"].notnull()

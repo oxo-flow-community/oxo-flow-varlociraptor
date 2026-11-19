@@ -3,7 +3,7 @@ Copyright (c) 2026 oxo-flow-community
 
 This pipeline is a port of snakemake-workflows/dna-seq-varlociraptor
 (https://github.com/snakemake-workflows/dna-seq-varlociraptor), version
-6.10.0 (commit b65c3350b31d68f7fd36a497b9d11b37f2d03df3), authored by the
+6.11.4 (commit ed905978c61079b7abc024311ad63d884fa1ca36), authored by the
 dna-seq-varlociraptor workflow developers (Felix Mölder, Johannes Köster,
 and contributors).
 

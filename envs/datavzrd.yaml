@@ -1,6 +1,7 @@
-# datavzrd + yte — pinned to the datavzrd v9.14.0 wrapper environment
-# with one deviation: datavzrd is a conda-forge package (the bioconda
-# prefix never had it) and 2.70.0 is gone from the channel (live:
+# datavzrd + yte — pinned to the datavzrd v9.18.1 wrapper environment
+# (wrapper bumped from v9.14.0 at upstream v6.11.0 for parquet dataset
+# support) with one deviation: datavzrd is a conda-forge package (the
+# bioconda prefix never had it) and 2.70.0 is gone from the channel (live:
 # PackagesNotFoundError), so it is pinned to conda-forge::2.71.0.
 name: datavzrd
 channels:
