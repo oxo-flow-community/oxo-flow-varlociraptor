@@ -1,8 +1,8 @@
 """Join the fusions table with its partner records and arriba annotations.
 
 Port of the upstream workflow/scripts/create_fusions_table_per_group.py (MIT,
-snakemake-workflows dna-seq-varlociraptor v6.10.0), adapted to argv:
-  create_fusions_table_per_group.py FUSIONS.tsv ARRIBA.tsv --output OUT.tsv --log LOG
+snakemake-workflows dna-seq-varlociraptor v6.11.4), adapted to argv:
+  create_fusions_table_per_group.py FUSIONS.parquet ARRIBA.tsv --output OUT.parquet --log LOG
 
 The upstream logic is kept verbatim: first/second partner splitting by the
 breakend id suffix, shared-column dropping, short-observations joining,
@@ -21,7 +21,7 @@ def write(df, path):
     if not df.empty:
         remaining_columns = df.dropna(how="all", axis="columns").columns.tolist()
         df = df[remaining_columns]
-    df.to_csv(path, index=False, sep="\t")
+    df.to_parquet(path, index=False)
 
 
 def get_prefix_columns(df, prefix):
@@ -70,24 +70,16 @@ def join_short_obs(df, samples):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("varlociraptor", help="Input fusions table TSV (vembrane output)")
+    parser.add_argument("varlociraptor", help="Input fusions table parquet (vembrane output)")
     parser.add_argument("arriba", help="Arriba annotated candidates TSV")
-    parser.add_argument("--output", required=True, help="Output joined fusions TSV")
+    parser.add_argument("--output", required=True, help="Output joined fusions parquet")
     parser.add_argument("--log", required=True, help="Log file (stderr redirect)")
     args = parser.parse_args()
 
     if args.log:
         sys.stderr = open(args.log, "w")
 
-    calls = pd.read_csv(
-        args.varlociraptor,
-        sep="\t",
-        dtype={
-            "exon": "Int64",
-            "chromosome": str,
-            "position": str,
-        },
-    )
+    calls = pd.read_parquet(args.varlociraptor)
     calls[["feature_name", "feature_id"]] = calls[["feature_id", "feature_name"]].fillna(
         "('not_in_exon',)"
     )

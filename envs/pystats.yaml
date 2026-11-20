@@ -1,4 +1,7 @@
-# Python stats stack — pinned exactly to the upstream envs/pystats.yaml.
+# Python stats stack — pinned to the upstream envs/pystats.yaml at
+# v6.11.4 (upstream added polars, networkx and pyarrow for the somalier
+# sample-swap plot and the parquet call tables; the duplicate second
+# `pyarrow` pin of the upstream file is deduplicated to one entry).
 name: pystats
 channels:
   - conda-forge
@@ -8,7 +11,10 @@ dependencies:
   - bioconda::pysam=0.24
   - conda-forge::python=3.12
   - conda-forge::pandas=2.3
+  - conda-forge::polars=1.43
   - conda-forge::altair=6.2
   - conda-forge::scikit-learn=1.9
   - conda-forge::statsmodels=0.14
+  - conda-forge::networkx=3.6
+  - conda-forge::pyarrow=25.0
   - conda-forge::openpyxl=3.1

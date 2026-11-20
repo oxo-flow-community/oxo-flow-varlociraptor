@@ -148,4 +148,35 @@ for rule in "table::vembrane_table_fusions" "report::process_fusion_call_tables"
 done
 echo "  vembrane_table_fusions / process_fusion_call_tables / datavzrd_fusion_calls off in the default plan"
 
+echo "==> somalier sample-swap chain (v6.11.0): default plan schedules all five rules"
+# Upstream get_final_output collects the plot pair, so find_sites -> extract
+# -> groups -> relate -> plot must all execute on the default path.
+for rule in "qc::somalier_find_sites" "qc::somalier_extract" "qc::somalier_groups" "qc::somalier_relate" "qc::plot_putative_sample_swaps"; do
+    grep -qE "^  [0-9]+\. ${rule}[^ ]*  \[run" /tmp/oxo-dryrun-$$.txt \
+        || { echo "default plan: ${rule} not scheduled"; exit 1; }
+done
+echo "  somalier_find_sites / extract / groups / relate / plot_putative_sample_swaps on in the default plan"
+
+echo "==> atomize branch: dry-run with calling_atomize = true"
+# Upstream calling/atomize: the bcftools norm --atomize + sort chain and the
+# atomized scatter input schedule, the atomized preprocess twin (with
+# --atomic-candidate-variants) replaces the plain one (exclusive when gates).
+sed -e 's/^calling_atomize = false$/calling_atomize = true/' \
+    main.oxoflow > .atomize-test-tmp.oxoflow
+grep -q '^calling_atomize = true$' .atomize-test-tmp.oxoflow
+trap 'rm -f .atomize-test-tmp.oxoflow' EXIT
+"$OXO" dry-run .atomize-test-tmp.oxoflow --samples first:1 > /tmp/oxo-dryrun-atomize-$$.txt 2>&1
+for rule in "candidate_calling::freebayes_atomize" "candidate_calling::freebayes_atomize_sort" "candidate_calling::scatter_candidates_freebayes_atomized" "calling::varlociraptor_preprocess_freebayes_atomized"; do
+    grep -qE "^  [0-9]+\. ${rule}[^ ]*  \[run" /tmp/oxo-dryrun-atomize-$$.txt \
+        || { echo "atomize branch: ${rule} not scheduled"; exit 1; }
+done
+# Exclusive-gate sanity: the plain preprocess twin (no atomize flag) must be
+# off; the two-space anchor keeps this from matching the _atomized twin.
+if grep -qE "^  [0-9]+\. calling::varlociraptor_preprocess_freebayes  \[run" /tmp/oxo-dryrun-atomize-$$.txt; then
+    echo "atomize branch: plain varlociraptor_preprocess_freebayes unexpectedly scheduled"; exit 1
+fi
+rm -f .atomize-test-tmp.oxoflow
+trap - EXIT
+echo "  atomize chain + atomized scatter/preprocess twins on; plain preprocess twin off"
+
 echo "PASS"

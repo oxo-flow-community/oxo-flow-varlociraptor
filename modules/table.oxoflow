@@ -9,9 +9,20 @@
 #     requested by rule all; the upstream default config sets it to true, but
 #     the final output only requests it when tables.generate_excel is true —
 #     kept as upstream: generate_excel is not wired into get_final_output).
+#   * Upstream v6.11.0 wildcarded the rule to {fmt,tsv|parquet} and moved the
+#     call to `vembrane table --wide --output-fmt {fmt} ... --output {output}`
+#     (fmt=parquet for the datavzrd chain, fmt=csv for the .tsv instance,
+#     which rule all only requests when tables/activate is on). The port
+#     freezes the parquet instance — the only one consumed on the default
+#     path (datavzrd/report chain); the tsv/csv instance stays unported like
+#     tables/activate itself.
 #   * The vembrane expression/header are the exact 34 columns produced by
 #     get_vembrane_config with the default config (verified by simulation,
-#     see docs/table-columns.md).
+#     see docs/table-columns.md). v6.11.0 renamed the population-frequency
+#     column gnomADg_AF/"gnomad genome af" to MAX_AF/"max population
+#     frequency" and made user-requested annotation fields pass through; with
+#     the frozen default request ([EXON], already position-fixed in
+#     sort_order) the column set is otherwise unchanged.
 #   * The fusions twin is gated on the group's `calling` metadata like the
 #     filtering/calling fusions continuation (default calling="variants"
 #     keeps it SkippedByWhen). Its expression/header are the exact 23 columns
@@ -26,19 +37,19 @@ name = "table"
 # ---- upstream rule: vembrane_table ------------------------------------------
 [[rules]]
 name = "vembrane_table"
-description = "Render the variants table with vembrane (vembrane table)"
+description = "Render the variants table with vembrane (vembrane table --output-fmt parquet)"
 input = [
     "results/final-calls/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.normal-probs.bcf",
     "results/scenarios/SRR702070_group.yaml",
 ]
-output = ["results/tables/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.tsv"]
+output = ["results/tables/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.parquet"]
 shell = """
-vembrane table --wide --header \
-  "symbol, impact, hgvsp, hgvsc, consequence, clinical significance, gnomad genome af, exon, revel, chromosome, position, reference allele, alternative allele, protein position, protein alteration (short), canonical, mane_plus_clinical, prob: absent, prob: artifact, prob: germline_het, prob: germline_hom, prob: somatic_normal, prob: somatic_tumor_high, prob: somatic_tumor_low, prob: somatic_tumor_medium, tumor: allele frequency, tumor: allele frequency distribution, tumor: read depth, tumor: observations, id, gene, hgvsg, feature, end position" \
-  "ANN['SYMBOL'], ANN['IMPACT'], ANN['HGVSp'], ANN['HGVSc'], ANN['Consequence'], ANN['CLIN_SIG'], ANN['gnomADg_AF'], ANN['EXON'].raw, ANN['REVEL'], CHROM, POS, REF, ALT, ANN['Protein_position'].raw, ANN['Amino_acids'], ANN['CANONICAL'], ANN['MANE_PLUS_CLINICAL'], INFO['PROB_ABSENT'], INFO['PROB_ARTIFACT'], INFO['PROB_GERMLINE_HET'], INFO['PROB_GERMLINE_HOM'], INFO['PROB_SOMATIC_NORMAL'], INFO['PROB_SOMATIC_TUMOR_HIGH'], INFO['PROB_SOMATIC_TUMOR_LOW'], INFO['PROB_SOMATIC_TUMOR_MEDIUM'], FORMAT['AF']['tumor'], FORMAT['AFD']['tumor'], FORMAT['DP']['tumor'], FORMAT['OBS']['tumor'], ID, ANN['Gene'], ANN['HGVSg'], ANN['Feature'], INFO['END']" \
-  {input[0]} > {output} 2> {log}
+vembrane table --wide --output-fmt parquet --header \
+  "symbol, impact, hgvsp, hgvsc, consequence, clinical significance, max population frequency, exon, revel, chromosome, position, reference allele, alternative allele, protein position, protein alteration (short), canonical, mane_plus_clinical, prob: absent, prob: artifact, prob: germline_het, prob: germline_hom, prob: somatic_normal, prob: somatic_tumor_high, prob: somatic_tumor_low, prob: somatic_tumor_medium, tumor: allele frequency, tumor: allele frequency distribution, tumor: read depth, tumor: observations, id, gene, hgvsg, feature, end position" \
+  "ANN['SYMBOL'], ANN['IMPACT'], ANN['HGVSp'], ANN['HGVSc'], ANN['Consequence'], ANN['CLIN_SIG'], ANN['MAX_AF'], ANN['EXON'].raw, ANN['REVEL'], CHROM, POS, REF, ALT, ANN['Protein_position'].raw, ANN['Amino_acids'], ANN['CANONICAL'], ANN['MANE_PLUS_CLINICAL'], INFO['PROB_ABSENT'], INFO['PROB_ARTIFACT'], INFO['PROB_GERMLINE_HET'], INFO['PROB_GERMLINE_HOM'], INFO['PROB_SOMATIC_NORMAL'], INFO['PROB_SOMATIC_TUMOR_HIGH'], INFO['PROB_SOMATIC_TUMOR_LOW'], INFO['PROB_SOMATIC_TUMOR_MEDIUM'], FORMAT['AF']['tumor'], FORMAT['AFD']['tumor'], FORMAT['DP']['tumor'], FORMAT['OBS']['tumor'], ID, ANN['Gene'], ANN['HGVSg'], ANN['Feature'], INFO['END']" \
+  {input[0]} --output {output} 2> {log}
 """
-log = "logs/vembrane-table/SRR702070_group.some_id.variants.log"
+log = "logs/vembrane-table/SRR702070_group.some_id.variants.parquet.log"
 
 [rules.environment]
 conda = "envs/vembrane.yaml"
@@ -51,20 +62,20 @@ conda = "envs/vembrane.yaml"
 # frozen to "tumor" (default sample metadata).
 [[rules]]
 name = "vembrane_table_fusions"
-description = "Render the fusions table with vembrane (vembrane table)"
+description = "Render the fusions table with vembrane (vembrane table --output-fmt parquet)"
 when = "wildcard.calling == \"fusions\" || wildcard.calling == \"variants,fusions\""
 input = [
     "results/final-calls/{group}/{group}.some_id.fusions.fdr-controlled.normal-probs.bcf",
     "results/scenarios/{group}.yaml",
 ]
-output = ["results/tables/{group}/{group}.some_id.fusions.fdr-controlled.tsv"]
+output = ["results/tables/{group}/{group}.some_id.fusions.fdr-controlled.parquet"]
 shell = """
-vembrane table --wide --header \
+vembrane table --wide --output-fmt parquet --header \
   "chromosome, position, reference allele, alternative allele, feature_name, feature_id, exon, prob: absent, prob: artifact, prob: germline_het, prob: germline_hom, prob: somatic_normal, prob: somatic_tumor_high, prob: somatic_tumor_low, prob: somatic_tumor_medium, tumor: allele frequency, tumor: allele frequency distribution, tumor: read depth, mateid, tumor: short ref observations, tumor: short alt observations, tumor: observations, id, end position" \
   "CHROM, POS, REF, ALT, INFO['GENE_NAME'], INFO['GENE_ID'], INFO['EXON_NUMBER'][0], INFO['PROB_ABSENT'], INFO['PROB_ARTIFACT'], INFO['PROB_GERMLINE_HET'], INFO['PROB_GERMLINE_HOM'], INFO['PROB_SOMATIC_NORMAL'], INFO['PROB_SOMATIC_TUMOR_HIGH'], INFO['PROB_SOMATIC_TUMOR_LOW'], INFO['PROB_SOMATIC_TUMOR_MEDIUM'], FORMAT['AF']['tumor'], FORMAT['AFD']['tumor'], FORMAT['DP']['tumor'], INFO['MATEID'][0], FORMAT['SROBS']['tumor'], FORMAT['SAOBS']['tumor'], FORMAT['OBS']['tumor'], ID, INFO['END']" \
-  {input[0]} > {output} 2> {log}
+  {input[0]} --output {output} 2> {log}
 """
-log = "logs/vembrane-table/{group}.some_id.fusions.log"
+log = "logs/vembrane-table/{group}.some_id.fusions.parquet.log"
 
 [rules.environment]
 conda = "envs/vembrane.yaml"

@@ -1,0 +1,10 @@
+# somalier — pinned to the upstream envs/somalier.yaml (introduced with
+# upstream v6.11.0 for the somalier sample-swap detection rules). Upstream
+# deleted the orphaned envs/kmc.yaml at v6.11.4 ("chore: remove superfluous
+# environment"); the port drops its unconsumed copy the same way.
+name: somalier
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::somalier=0.3.2

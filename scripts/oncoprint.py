@@ -1,12 +1,18 @@
 """Prepare gene and variant oncoprint tables for datavzrd.
 
 Port of the upstream workflow/scripts/oncoprint.py (MIT, snakemake-workflows
-dna-seq-varlociraptor v6.10.0), adapted to a plain argv interface:
-  oncoprint.py --calls TABLE.tsv --groups '["G"]' --labels '{"columns": [...], "data": [...]}'
-    --gene-oncoprint OUT.tsv --sortings-dir DIR --variants-dir DIR --log LOG
+dna-seq-varlociraptor v6.11.4), adapted to a plain argv interface:
+  oncoprint.py --calls TABLE.parquet --groups '["G"]' --labels '{"columns": [...], "data": [...]}'
+    --gene-oncoprint OUT.parquet --sortings-dir DIR --variants-dir DIR
+    --color-domains OUT.json --min-recurrence N --log LOG
 
 With the default single-group configuration the label sortings loop is a no-op
-and the sortings directory is still created (as upstream).
+and the sortings directory is still created (as upstream). Since v6.11.0 the
+oncoprint tables are parquet, the variant oncoprints carry the variant key
+columns (chromosome/position/ref/alt, for the datavzrd hgvsc dropdowns), the
+label sortings are filtered by min_recurrence (upstream
+report/label_dependency/min_recurrence), and the script emits the shared
+heatmap color domains (color-domains.json) used by both oncoprint views.
 """
 
 import argparse
@@ -44,11 +50,9 @@ def join_gene_vartypes(df):
 
 
 def load_calls(path, group):
-    calls = pd.read_csv(
-        path,
-        sep="\t",
-        usecols=["symbol", "vartype", "hgvsp", "hgvsc", "hgvsg", "consequence"],
-    )
+    calls = pd.read_parquet(
+        path
+    ).loc[:, ["symbol", "vartype", "hgvsp", "hgvsc", "hgvsg", "consequence", "chromosome", "position", "reference allele", "alternative allele"]]
     calls["group"] = group
     calls.loc[:, "consequence"] = calls["consequence"].str.replace("&", ",")
     return calls.drop_duplicates()
@@ -67,6 +71,9 @@ def sort_by_recurrence(matrix, no_occurence_check_func):
     matrix = matrix.sort_values("nocalls", ascending=True).drop(
         labels=["nocalls"], axis="columns"
     )
+    # sort columns in oncoprint style, i.e. grouping the first row values together
+    # and within that the second row values, etc.
+    matrix.sort_values(matrix.index.tolist(), na_position="last", axis="columns", inplace=True)
     return matrix
 
 
@@ -79,11 +86,15 @@ def add_missing_groups(matrix, groups, index_mate):
 
 def attach_group_annotation(matrix, group_annotation):
     index_cols = matrix.index.names
-    return (
+    column_order = matrix.columns.tolist()
+    matrix = (
         pd.concat([group_annotation.reset_index(drop=True), matrix.reset_index()])
         .set_index(index_cols)
         .reset_index()
     )
+    # concat changes the column order, restore it
+    matrix = matrix[index_cols + column_order]
+    return matrix
 
 
 def gene_oncoprint(calls, groups):
@@ -114,8 +125,8 @@ def gene_oncoprint(calls, groups):
         return pd.DataFrame({col: [] for col in cols}).set_index(list(groups))
 
 
-def variant_oncoprint(gene_calls, group_annotation, groups):
-    gene_calls = gene_calls[["group", "hgvsp", "hgvsc", "hgvsg", "consequence"]]
+def variant_oncoprint(gene_calls, groups):
+    gene_calls = gene_calls[["group", "hgvsp", "hgvsc", "hgvsg", "consequence", "chromosome", "position", "reference allele", "alternative allele"]]
     gene_calls.loc[:, "exists"] = "+"
 
     gene_calls = gene_calls.drop_duplicates()
@@ -131,7 +142,7 @@ def variant_oncoprint(gene_calls, group_annotation, groups):
         .drop(["id"], axis="columns")
     )
     matrix = grouped.set_index(
-        ["hgvsp", "hgvsc", "hgvsg", "consequence", "group"]
+        ["hgvsp", "hgvsc", "hgvsg", "consequence", "group", "chromosome", "position", "reference allele", "alternative allele"]
     ).unstack(level="group")
 
     matrix = add_missing_groups(matrix, groups, "exists")
@@ -140,8 +151,6 @@ def variant_oncoprint(gene_calls, group_annotation, groups):
     if len(matrix.columns) > 1:
         # sort by recurrence
         matrix = sort_by_recurrence(matrix, lambda matrix: matrix.isna())
-
-    matrix = attach_group_annotation(matrix, group_annotation)
 
     return matrix
 
@@ -153,15 +162,15 @@ def store(data, output, labels_df, label_idx=None):
 
     # add labels
     index_cols = data.index.names
-    cols = data.columns
-    data = pd.concat([_labels_df, data.reset_index()]).set_index(index_cols)
+    cols = data.columns.tolist()
+    data = pd.concat([_labels_df, data.reset_index()])
     # restore column order
-    data = data[cols]
+    data = data[index_cols + cols]
 
-    data.to_csv(output, sep="\t", float_format="{:.2g}".format)
+    data.to_parquet(output, index=False)
 
 
-def sort_oncoprint_labels(data, labels_df, sortings_dir, groups):
+def sort_oncoprint_labels(data, labels_df, sortings_dir, min_recurrence):
     labels = labels_df.index
 
     for label_idx, label in enumerate(labels):
@@ -171,6 +180,17 @@ def sort_oncoprint_labels(data, labels_df, sortings_dir, groups):
             feature_matrix[~pd.isna(feature_matrix)] = True
             feature_matrix[pd.isna(feature_matrix)] = False
             feature_matrix = feature_matrix.astype(bool)
+
+            filtered_features = (
+                feature_matrix.sum(axis="index") >= min_recurrence
+            ).reset_index(drop=True).values
+
+            # filter to only those columns (we are transposed here)
+            # with min_recurrence "True" values
+            feature_matrix = feature_matrix.loc[
+                :,
+                filtered_features,
+            ]
 
             # target vector: label values, converted into factors
             target_vector = labels_df.loc[label]
@@ -216,23 +236,29 @@ def sort_oncoprint_labels(data, labels_df, sortings_dir, groups):
             sorted_target_vector = target_vector.sort_values()
             sorted_data = sorted_data[sorted_target_vector.index]
 
+            # reduce to filtered features
+            sorted_data = sorted_data.loc[filtered_features]
+
             # add mutual information
             sorted_data.insert(0, "FDR dependency", fdr)
             sorted_data.insert(0, "p-value dependency", pvals)
 
             outdata = sorted_data.iloc[sorted_idx]
-        outpath = os.path.join(sortings_dir, f"{label}.tsv")
+            outdata = outdata.reset_index().set_index(["symbol", "consequence", "p-value dependency", "FDR dependency"])
+        outpath = os.path.join(sortings_dir, f"{label}.parquet")
         store(outdata, outpath, labels_df, label_idx=label_idx)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--calls", nargs="+", required=True, help="Postprocessed calls TSVs")
+    parser.add_argument("--calls", nargs="+", required=True, help="Postprocessed calls parquets")
     parser.add_argument("--groups", required=True, help="JSON list of group names")
     parser.add_argument("--labels", required=True, help="JSON-encoded labels DataFrame")
-    parser.add_argument("--gene-oncoprint", required=True, help="Output gene oncoprint TSV")
+    parser.add_argument("--gene-oncoprint", required=True, help="Output gene oncoprint parquet")
     parser.add_argument("--sortings-dir", required=True, help="Output label sortings directory")
     parser.add_argument("--variants-dir", required=True, help="Output variant oncoprints directory")
+    parser.add_argument("--color-domains", required=True, help="Output color domains JSON")
+    parser.add_argument("--min-recurrence", required=True, type=int, help="Minimum recurrence for label sorting (upstream report/label_dependency/min_recurrence)")
     parser.add_argument("--log", required=True, help="Log file (stderr redirect)")
     args = parser.parse_args()
 
@@ -248,15 +274,33 @@ def main():
         ]
     )
 
+    def write_color_domains(gene_matrix, variant_values):
+        with open(args.color_domains, "w") as handle:
+            json.dump(
+                {
+                    "gene": sorted(
+                        {
+                            value
+                            for group in groups
+                            if group in gene_matrix.columns
+                            for value in gene_matrix[group].dropna().unique()
+                        }
+                    ),
+                    "variant": sorted(variant_values),
+                },
+                handle,
+            )
+
     if calls.empty:
         # no candidate variants (the live fixture yields none): emit an
-        # empty gene oncoprint and empty variant dir instead of crashing
-        # on the MultiIndex construction below
+        # empty gene oncoprint, empty variant dir and empty color domains
+        # instead of crashing on the MultiIndex construction below
         os.makedirs(args.sortings_dir, exist_ok=True)
         os.makedirs(args.variants_dir, exist_ok=True)
-        pd.DataFrame(columns=["symbol", "vartype", "consequence", "group"]).to_csv(
-            args.gene_oncoprint, sep="	", index=False
+        pd.DataFrame(columns=["symbol", "vartype", "consequence", "group"]).to_parquet(
+            args.gene_oncoprint, index=False
         )
+        write_color_domains(pd.DataFrame(), [])
         sys.exit(0)
 
     labels_data = json.loads(args.labels)
@@ -268,17 +312,23 @@ def main():
 
     group_annotation = load_group_annotation(groups)
     gene_oncoprint_main = attach_group_annotation(gene_oncoprint_df, group_annotation)
-    gene_oncoprint_main.to_csv(args.gene_oncoprint, sep="\t", index=False)
+    gene_oncoprint_main.to_parquet(args.gene_oncoprint, index=False)
 
     os.makedirs(args.sortings_dir, exist_ok=True)
 
-    sort_oncoprint_labels(gene_oncoprint_df, labels_df, args.sortings_dir, groups)
+    sort_oncoprint_labels(gene_oncoprint_df, labels_df, args.sortings_dir, args.min_recurrence)
 
     os.makedirs(args.variants_dir, exist_ok=True)
+    variant_values = set()
     for gene, gene_calls in calls.groupby("symbol", observed=False):
-        variant_oncoprint(gene_calls, group_annotation, groups).to_csv(
-            Path(args.variants_dir) / f"{gene}.tsv", sep="\t", index=False
+        matrix = variant_oncoprint(gene_calls, groups)
+        for group in groups:
+            if group in matrix.columns:
+                variant_values.update(matrix[group].dropna().unique())
+        attach_group_annotation(matrix, group_annotation).to_parquet(
+            Path(args.variants_dir) / f"{gene}.parquet", index=False
         )
+    write_color_domains(gene_oncoprint_df, variant_values)
 
 
 if __name__ == "__main__":

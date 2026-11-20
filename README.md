@@ -3,7 +3,7 @@
 [![CI](https://github.com/oxo-flow-community/oxo-flow-varlociraptor/actions/workflows/ci.yml/badge.svg)](https://github.com/oxo-flow-community/oxo-flow-varlociraptor/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-> ★ Verified · ⇄ Official port of [`snakemake-workflows/dna-seq-varlociraptor`](https://github.com/snakemake-workflows/dna-seq-varlociraptor) @ `v6.10.0` — same tools, same versions, same commands. Part of the [oxo-flow-community catalog](https://oxo-flow-community.github.io/).
+> ★ Verified · ⇄ Official port of [`snakemake-workflows/dna-seq-varlociraptor`](https://github.com/snakemake-workflows/dna-seq-varlociraptor) @ `v6.11.4` — same tools, same versions, same commands. Part of the [oxo-flow-community catalog](https://oxo-flow-community.github.io/).
 
 Align paired-end short reads against the 1000 Genomes human pangenome with vg
 giraffe, call candidate small and structural variants with freebayes and
@@ -114,9 +114,10 @@ sample-level branches of the default-path mapping module are gated on config
 keys instead of separate modules: `umi_read` (UMI-annotated dedup via
 umi_tools + picard `--BARCODE_TAG BX`) and `datatype = "rna"` (GATK
 SplitNCigarReads + split-BAM-sourced BQSR).
-`oxo-flow validate` counts every rule unconditionally: 179 rules / 340
-dependencies (88 rules execute on the default path alone; the executor skips
-the 88 gated rules at run time when their key is `false`).
+`oxo-flow validate` counts every rule unconditionally: 189 rules / 371
+dependencies (93 rules execute on the default path alone, including the
+v6.11.0 somalier sample-swap chain; the executor skips the 96 gated rules at
+run time when their key is `false`).
 
 ### Configuration
 
@@ -138,6 +139,8 @@ the 88 gated rules at run time when their key is `false`).
 | `consensus_activate` | `calc_consensus_reads/activate` | `false` | fragment-consensus read collapse + re-mapping to the bwa reference (8 rules); combine with `bwa_align_activate`, `markduplicates_extra = "--TAG_DUPLICATE_SET_MEMBERS true"` and `freebayes_min_alternate_count = 1` |
 | `dgidb_activate` / `annotation_selection` | `annotations/dgidb` / `get_final_selected_annotation` | `false` / `db_annotated` | DGIdb annotation of the final calls; set `annotation_selection = "dgidb_annotated"` together with `dgidb_activate` |
 | `freebayes_min_alternate_count` | `params/freebayes` | `2` | upstream: `1` when consensus reads are on |
+| `freebayes_use_best_n_alleles` | `params/freebayes/use_best_n_alleles` | `""` | upstream (v6.11.0) optional allele cap `--use-best-n-alleles N`; empty = upstream unset = freebayes all-alleles default |
+| `calling_atomize` | `calling/atomize` | `false` | upstream (v6.11.1) freebayes atomization: `freebayes_atomize`/`freebayes_atomize_sort` (bcftools norm --atomize + sort), the atomized scatter input and `--atomic-candidate-variants` on the freebayes preprocess (exclusive when-gated twins) |
 | `markduplicates_extra` | `params/picard/MarkDuplicates` + `get_markduplicates_extra` | `""` | extra MarkDuplicates args; upstream adds `--TAG_DUPLICATE_SET_MEMBERS true` when consensus reads are on |
 | `umi_read` | `config/samples.tsv` `umi_read` column | `""` | UMI-containing reads: the sorted BAM is passed through `umi_tools group` (`mapping::annotate_umis`) and MarkDuplicates consumes the annotated BAM with `--BARCODE_TAG BX` (`mapping::mark_duplicates_umi`); empty (default) mirrors an empty upstream samples.tsv column = UMI flow off |
 | `datatype` | `config/samples.tsv` `datatype` column (`get_recalibrate_quality_input`) | `"dna"` | `"rna"` inserts GATK SplitNCigarReads (`mapping::splitncigarreads`) and re-sources the BQSR chain from `results/split/{sample}.bam` (`*_rna` twins); `"dna"` keeps today's exact behavior. The remaining upstream datatype branches (long-read) are not ported |
@@ -183,7 +186,7 @@ plan identical.
 
 ## Source
 
-Upstream: **[snakemake-workflows/dna-seq-varlociraptor](https://github.com/snakemake-workflows/dna-seq-varlociraptor)** @ `v6.10.0` (commit `b65c3350b31d68f7fd36a497b9d11b37f2d03df3`), MIT license. Created 2026-08-15; this workflow may lag behind upstream releases. See [NOTICE.md](NOTICE.md) for attribution.
+Upstream: **[snakemake-workflows/dna-seq-varlociraptor](https://github.com/snakemake-workflows/dna-seq-varlociraptor)** @ `v6.11.4` (commit `ed905978c61079b7abc024311ad63d884fa1ca36`), MIT license. Created 2026-08-15, updated 2026-11-20; this workflow may lag behind upstream releases. See [NOTICE.md](NOTICE.md) for attribution.
 
 ## Fidelity
 
@@ -205,7 +208,7 @@ deliberate deviations:
 | per-rule conda environments | one env per tool pin set (`envs/`) | same packages, same pins, consolidated |
 | snakemake `before_update`/`update` flags (population db) | no input edge; the db path is read/written as-is | oxo-flow has no such flags; a declared input would create a DAG cycle (`validate` rejects it) |
 | snakemake `temp()` outputs of the gated branch modules | plain outputs (`temporary = true` where the default path used it) | see the module headers; `join_mutational_signatures` writes with `>` instead of the upstream `>>` because the engine does not pre-delete outputs |
-| snakemake script API (`snakemake.input/output/params`) in the 6 branch scripts | argv ports (`--output`/`--log` flags, comma-joined lists) | same logic verbatim, cf. the default-path script ports |
+| snakemake script API (`snakemake.input/output/params`) in the 8 branch scripts | argv ports (`--output`/`--log` flags, comma-joined lists) | same logic verbatim, cf. the default-path script ports |
 | chm sample group vertical slice (benchmarking) | not ported | the ported CHM-eval flow (`chm_eval_sample` ... `chm_eval`) re-derives the CHM1 FASTQs, but the chm sample is not in the port's `config/samples.tsv`, so the chm reads do not flow through mapping -> calling -> `control_fdr`; `rename_chromosomes`/`chm_eval` keep orphan inputs (validate warns, like upstream without the chm sample) |
 | consensus-read calling (`calc_consensus_reads` flow) | `consensus.oxoflow`, gated on `consensus_activate` | upstream switches the `recalibrate_base_qualities`/`apply_bqsr` input via `get_recalibrate_quality_input`; the port models this as gated duplicate rules with the same outputs and exclusive `when` gates (`!consensus_activate` vs `consensus_activate`) |
 | `annotate_umis` (mapping.smk UMI branch) + `get_markduplicates_input`/`get_markduplicates_extra` UMI branch | `mapping.oxoflow` `annotate_umis`/`mark_duplicates_umi` twins, gated on `umi_read` | upstream switches MarkDuplicates to the umi_tools-annotated BAM with `--BARCODE_TAG BX` when the samples.tsv `umi_read` column is set; the port models this as exclusive twins of the plain dedup rules (`umi_tools group`, `umi_tools` env), with the sorted-BAM index (`bam_index_sorted`) gated like its only consumer |
@@ -221,6 +224,11 @@ deliberate deviations:
 | `get_candidate_calls` for caller=arriba (UNFILTERED group concat) + `get_varlociraptor_params` (propagate-info-fields extra) | `calling::varlociraptor_preprocess_arriba`/`varlociraptor_call_arriba` consuming `results/candidate-calls/arriba/{group}/{group}.bcf` | command text identical; the arriba path has no scatter fan-out (no scatteritem) |
 | `scatter_candidates`/`filter_group_regions` conditional inputs (Python `if config.get("target_regions", None)`) | `optional = "any"` input pairs + `if [ -n "{config.target_regions}" ]` shell switch | engine equivalent of the upstream input selection |
 | upstream `get_target_regions` chr-strip (`awk '{sub("^chr","",$0); print}'`) | verbatim | target BEDs must be chr-less (Ensembl GRCh38 primary assembly); chr-prefixed files fail closed, exactly as upstream |
+| `calling/atomize` + `params/freebayes/use_best_n_alleles` switches (Python params) | `config.calling_atomize` + `config.freebayes_use_best_n_alleles` (empty = unset) with exclusive `when`-gated twin rules | upstream picks the atomized candidate input and the preprocess extra `--atomic-candidate-variants` in Python (`get_fixed_candidate_calls`, `get_varlociraptor_params`); the port models the two exclusive branches as twin rules on the same outputs (atomize chain `candidate_calling::freebayes_atomize` → `freebayes_atomize_sort` (temporary file) → `scatter_candidates_freebayes_atomized` + `calling::varlociraptor_preprocess_freebayes_atomized`), default off — with the flag empty/off the plan is rule-identical to v6.10.0 (the `freebayes` rule just splices an empty string where the upstream format string splices `get_freebayes_use_best_n_alleles()`) |
+| vembrane `{fmt,tsv|parquet}` wildcard + `vembrane table --output-fmt {fmt} ... --output {output}` (v6.11.0) | frozen to the `parquet` instance (`--output-fmt parquet`); the tsv/csv instance (`tables/activate`) stays unported like that switch | the parquet table is the only one consumed on the default path (datavzrd chain); both the variant and the fusions table rules, `process_call_tables`, `prepare_oncoprint` (gene/variant oncoprints + `color-domains.json`), the fusion join and the datavzrd variables files follow the parquet end-to-end; the v6.11.0 MAX_AF rename (`gnomad genome af`→`max population frequency`, `ANN['MAX_AF']`) is adopted in the 34-column header/expression; the user-annotation pass-through and SWISSPROT `sort_order` additions are default-config no-ops (`[EXON]` already position-fixed) |
+| `prepare_oncoprint` `min_recurrence` chi2 filter + shared color domains (`report/label_dependency/min_recurrence`, default config 5) | `--min-recurrence 5` argument, `--color-domains` output, `scripts/oncoprint.py` adopts the filtered-feature/`p-value dependency` index handling | the code lookup default is 1, the upstream default config sets 5 — frozen with a comment; `color-domains.json` is a declared input of `datavzrd_variants_calls` as upstream |
+| somalier sample-swap detection chain (`somalier find-sites`/`extract`/`groups`/`relate`/`plot`, v6.11.0, default targets via `get_final_output`) | `qc::somalier_*` + `qc::plot_putative_sample_swaps` (plots `target = true`) | shells verbatim; the script-API rules (samples sheet params) become argv ports with the frame-encoded JSON idiom; upstream `report()` category/subcategory/caption/labels annotations are report-decoration machinery the port has no counterpart for — plots ship as plain HTML (the `.rst` captions are not ported); env `envs/somalier.yaml` (somalier 0.3.2) added, the orphaned upstream `envs/kmc.yaml` deletion adopted |
+| `mapping.smk` quote fix, `Snakefile` `min_version` bump (Snakemake 9.25.2), `CHANGELOG.md`, `.test/` configs, `workflow/config.yaml` plugins `sort:` list (binned max vaf/impact/revel) | not ported | cosmetic; engine N/A (oxo-flow has no Snakemake min_version); changelog not a runtime artifact; test configs are upstream harness fixtures; the plugins `sort:` list has no consumer in any upstream rule at the tag (decline, recorded here — flagged for the reviewer) |
 
 ## Test
 
@@ -228,11 +236,13 @@ deliberate deviations:
 bash test/run.sh
 ```
 
-Runs `oxo-flow validate`, `oxo-flow lint`, a `dry-run` smoke check, a debug
-scan for unexpanded wildcards and five dry-run branch checks that flip the
-gated config keys into a temporary copy of `main.oxoflow` (ribodetector-style
-exclusive-gate sanity for the `umi_read`, `datatype = "rna"` and
-`testcase_activate`/`testcase_locus` branches, plus the fusions-continuation
+Runs `oxo-flow validate`, `oxo-flow lint`, a `dry-run` smoke check (which
+also asserts the five v6.11.0 somalier sample-swap rules on the default
+plan), a debug scan for unexpanded wildcards and six dry-run branch checks
+that flip the gated config keys into a temporary copy of `main.oxoflow`
+(ribodetector-style exclusive-gate sanity for the `umi_read`,
+`datatype = "rna"`, `testcase_activate`/`testcase_locus` and
+`calling_atomize` branches, plus the fusions-continuation
 `calling` metadata gate — which also asserts the fusions table/joined-table/
 datavzrd fusion-report rules join the plan); CI runs the same script on
 every push.

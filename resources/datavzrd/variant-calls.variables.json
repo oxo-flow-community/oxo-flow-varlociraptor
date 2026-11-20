@@ -21,10 +21,11 @@
     "batch": "all"
   },
   "input": {
-    "calls": ["results/tables/SRR702070_group/SRR702070_group.some_id.variants.postprocessed.fdr-controlled.tsv"],
+    "calls": ["results/tables/SRR702070_group/SRR702070_group.some_id.variants.postprocessed.fdr-controlled.parquet"],
     "linkouts": "resources/datavzrd/linkouts.js",
     "gene_oncoprint": [],
     "variant_oncoprints": [],
-    "oncoprint_sorted_datasets": "results/tables/oncoprints/all.some_id/label_sortings/"
+    "oncoprint_sorted_datasets": "results/tables/oncoprints/all.some_id/label_sortings/",
+    "color_domains": "results/tables/oncoprints/all.some_id/color-domains.json"
   }
 }

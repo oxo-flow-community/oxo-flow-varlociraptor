@@ -6,6 +6,19 @@
 #   samtools_idxstats -> qc::samtools_idxstats (samtools idxstats v9.15.0 wrapper)
 #   samtools_stats  -> qc::samtools_stats     (samtools stats v9.15.0 wrapper)
 #   multiqc         -> qc::multiqc            (multiqc v9.9.0 wrapper)
+#   somalier_find_sites -> qc::somalier_find_sites (somalier 0.3.2, v6.11.0)
+#   somalier_extract    -> qc::somalier_extract    (v6.11.0)
+#   somalier_groups     -> qc::somalier_groups     (scripts/somalier_groups.py)
+#   somalier_relate     -> qc::somalier_relate     (v6.11.0)
+#   plot_putative_sample_swaps -> qc::plot_putative_sample_swaps
+#                         (scripts/plot_putative_sample_swaps.py; default
+#                          target — upstream get_final_output collects both
+#                          plots)
+#
+# The somalier chain (v6.11.0 putative sample-swap detection) is ported with
+# the upstream shells verbatim; the report() caption/subcategory/labels
+# annotations on the plot outputs are upstream report-decoration machinery
+# the port has no counterpart for (see README Fidelity).
 #
 # Upstream file names are kept byte-identical so MultiQC input resolution
 # matches: results/qc/fastqc/{sample}/lane1.fq1_fastqc.zip etc.
@@ -114,3 +127,107 @@ log = "logs/multiqc/SRR702070_group.log"
 
 [rules.environment]
 conda = "envs/multiqc.yaml"
+
+# ---- upstream rule: somalier_find_sites (v6.11.0) ---------------------------
+[[rules]]
+name = "somalier_find_sites"
+description = "Find germline population sites for somalier (somalier find-sites)"
+input = ["resources/variation.noiupac.vcf.gz"]
+output = ["resources/somalier/sites.vcf.gz"]
+shell = """
+somalier find-sites --min-AF 0.45 --min-AN 2000 --AF-field MAF --AN-field MAC \
+  --output-vcf {output} {input} 2> {log}
+"""
+log = "logs/somalier_find_sites.log"
+
+[rules.environment]
+conda = "envs/somalier.yaml"
+
+# ---- upstream rule: somalier_extract (v6.11.0) ------------------------------
+# {sample} frozen to the single fixture sample; upstream's params.outdir =
+# parent of the output (results/somalier/data).
+[[rules]]
+name = "somalier_extract"
+description = "Extract per-sample pileup data for somalier (somalier extract)"
+input = [
+    "results/recal/SRR702070.bam",
+    "results/recal/SRR702070.bai",
+    "resources/somalier/sites.vcf.gz",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta",
+    "resources/genome.dna.homo_sapiens.GRCh38.111.fasta.fai",
+]
+output = ["results/somalier/data/SRR702070.somalier"]
+shell = """
+somalier extract -d results/somalier/data \
+  --sites {input[2]} -f {input[3]} {input[0]} 2> {log}
+"""
+log = "logs/somalier_extract/SRR702070.log"
+
+[rules.environment]
+conda = "envs/somalier.yaml"
+
+# ---- upstream rule: somalier_groups (v6.11.0, script) -----------------------
+# Upstream script API: snakemake.params.samples (the samples sheet) -> the
+# frame-encoded JSON idiom.
+[[rules]]
+name = "somalier_groups"
+description = "Write the group -> samples mapping for somalier relate (scripts/somalier_groups.py)"
+output = ["resources/somalier/groups.txt"]
+temporary = true
+shell = """
+python scripts/somalier_groups.py \
+  --samples '{"columns": ["sample_name", "alias", "group", "platform", "purity", "panel", "umi_read", "umi_len", "datatype", "calling"], "data": [["SRR702070", "tumor", "SRR702070_group", "ILLUMINA", 1.0, "", "", "", "dna", "variants"]]}' \
+  --output {output} --log {log}
+"""
+log = "logs/somalier_groups.log"
+
+[rules.environment]
+conda = "envs/pystats.yaml"
+
+# ---- upstream rule: somalier_relate (v6.11.0) -------------------------------
+# collect over samples collapses to the single fixture sample; upstream's
+# params.outdir/all prefix is results/somalier/all.
+[[rules]]
+name = "somalier_relate"
+description = "Relate samples (relatedness/concordance) with somalier relate"
+input = [
+    "results/somalier/data/SRR702070.somalier",
+    "resources/somalier/sites.vcf.gz",
+    "resources/somalier/groups.txt",
+]
+output = [
+    "results/somalier/all.samples.tsv",
+    "results/somalier/all.pairs.tsv",
+    "results/somalier/all.html",
+]
+shell = """
+somalier relate --groups {input[2]} --sites {input[1]} \
+  -o results/somalier/all {input[0]} 2> {log}
+"""
+log = "logs/somalier_relate.log"
+
+[rules.environment]
+conda = "envs/somalier.yaml"
+
+# ---- upstream rule: plot_putative_sample_swaps (v6.11.0, script) ------------
+# Upstream script API: snakemake.params.samples -> the frame-encoded JSON
+# idiom. Default target (get_final_output collects both plots); upstream's
+# report() captions/categories are not ported (see module header).
+[[rules]]
+name = "plot_putative_sample_swaps"
+description = "Plot the putative sample-swap graph and heatmap (scripts/plot_putative_sample_swaps.py)"
+input = ["results/somalier/all.pairs.tsv"]
+output = [
+    "results/plots/all.putative_swaps.graph.html",
+    "results/plots/all.putative_swaps.heatmap.html",
+]
+target = true
+shell = """
+python scripts/plot_putative_sample_swaps.py --pairs {input[0]} \
+  --samples '{"columns": ["sample_name", "alias", "group", "platform", "purity", "panel", "umi_read", "umi_len", "datatype", "calling"], "data": [["SRR702070", "tumor", "SRR702070_group", "ILLUMINA", 1.0, "", "", "", "dna", "variants"]]}' \
+  --graph {output[0]} --heatmap {output[1]} --log {log}
+"""
+log = "logs/plot_putative_sample_swaps.log"
+
+[rules.environment]
+conda = "envs/pystats.yaml"

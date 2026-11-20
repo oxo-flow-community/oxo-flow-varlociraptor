@@ -5,15 +5,20 @@
 #   process_fusion_call_tables  -> report::process_fusion_call_tables
 #   bedtools_merge              -> report::bedtools_merge (bedtools intersect v2.6.0 wrapper)
 #   coverage_table              -> report::coverage_table
-#   datavzrd_variants_calls     -> report::datavzrd_variants_calls (datavzrd v9.14.0 wrapper)
-#   datavzrd_fusion_calls       -> report::datavzrd_fusion_calls   (datavzrd v9.14.0 wrapper)
-#   datavzrd_coverage           -> report::datavzrd_coverage      (datavzrd v9.14.0 wrapper)
+#   datavzrd_variants_calls     -> report::datavzrd_variants_calls (datavzrd v9.18.1 wrapper)
+#   datavzrd_fusion_calls       -> report::datavzrd_fusion_calls   (datavzrd v9.18.1 wrapper)
+#   datavzrd_coverage           -> report::datavzrd_coverage      (datavzrd v9.18.1 wrapper)
 #
 # Deviations (details in README.md):
 #   * prepare_oncoprint runs (its label_sortings directory is a static input
 #     of datavzrd_variants_calls), but with a single group the rendered
 #     template has no oncoprint datasets/views (get_oncoprint returns empty
-#     lists); the directory outputs become marker files.
+#     lists); the directory outputs become marker files. Since v6.11.0 the
+#     gene/variant oncoprints and the call tables are parquet, and the rule
+#     additionally emits the shared heatmap color domains
+#     (color-domains.json, consumed by datavzrd_variants_calls and declared
+#     here as its input, as upstream); min_recurrence is frozen to the
+#     upstream default config's report/label_dependency/min_recurrence = 5.
 #   * process_fusion_call_tables/datavzrd_fusion_calls are gated on the
 #     group's `calling` metadata like the filtering fusions chain (default
 #     calling="variants" keeps them SkippedByWhen). The arriba input is
@@ -21,7 +26,7 @@
 #     producer fusion::annotate_exons); with more than one fusions sample the
 #     port would need one rule per sample.
 #   * yte templating is driven by scripts/datavzrd.py with a pre-rendered
-#     variables JSON (datavzrd v9.14.0 wrapper semantics preserved).
+#     variables JSON (datavzrd v9.18.1 wrapper semantics preserved).
 #   * event_desc/labels are the values of the "some_id" event in the upstream
 #     default config.
 
@@ -29,11 +34,12 @@
 name = "report"
 
 # ---- upstream rule: process_call_tables -------------------------------------
+# v6.11.0: the call tables moved to parquet (input and output).
 [[rules]]
 name = "process_call_tables"
 description = "Postprocess the variants table (scripts/process-call-tables.py)"
-input = ["results/tables/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.tsv"]
-output = ["results/tables/SRR702070_group/SRR702070_group.some_id.variants.postprocessed.fdr-controlled.tsv"]
+input = ["results/tables/SRR702070_group/SRR702070_group.some_id.variants.fdr-controlled.parquet"]
+output = ["results/tables/SRR702070_group/SRR702070_group.some_id.variants.postprocessed.fdr-controlled.parquet"]
 shell = """
 python scripts/process-call-tables.py {input[0]} --output {output} --sorting '[]' --log {log}
 """
@@ -46,23 +52,31 @@ conda = "envs/pystats.yaml"
 # Runs in the default path because datavzrd_variants_calls declares the
 # label_sortings directory as a static input (v6.10.0); with a single group
 # the label sorting loop is a no-op and the variant-oncoprints tables are
-# not referenced by the rendered template.
+# not referenced by the rendered template. Since v6.11.0 the oncoprint tables
+# are parquet and the rule also emits color-domains.json (upstream output;
+# consumed by the template's oncoprint views, which the single-group render
+# omits, but the DAG edge is declared as upstream). min_recurrence = 5 is the
+# upstream default config's report/label_dependency/min_recurrence (the code
+# lookup default is 1).
 [[rules]]
 name = "prepare_oncoprint"
-description = "Prepare gene and variant oncoprint tables (scripts/oncoprint.py)"
-input = ["results/tables/SRR702070_group/SRR702070_group.some_id.variants.postprocessed.fdr-controlled.tsv"]
+description = "Prepare gene and variant oncoprint tables and the shared color domains (scripts/oncoprint.py)"
+input = ["results/tables/SRR702070_group/SRR702070_group.some_id.variants.postprocessed.fdr-controlled.parquet"]
 output = [
-    "results/tables/oncoprints/all.some_id/gene-oncoprint.tsv",
+    "results/tables/oncoprints/all.some_id/gene-oncoprint.parquet",
     "results/tables/oncoprints/all.some_id/label_sortings/.completed",
     "results/tables/oncoprints/all.some_id/variant-oncoprints/.completed",
+    "results/tables/oncoprints/all.some_id/color-domains.json",
 ]
 shell = """
 python scripts/oncoprint.py --calls {input[0]} \
   --groups '["SRR702070_group"]' \
   --labels '{"columns": [], "data": []}' \
-  --gene-oncoprint results/tables/oncoprints/all.some_id/gene-oncoprint.tsv \
+  --min-recurrence 5 \
+  --gene-oncoprint results/tables/oncoprints/all.some_id/gene-oncoprint.parquet \
   --sortings-dir results/tables/oncoprints/all.some_id/label_sortings \
   --variants-dir results/tables/oncoprints/all.some_id/variant-oncoprints \
+  --color-domains results/tables/oncoprints/all.some_id/color-domains.json \
   --log {log} && \
 touch results/tables/oncoprints/all.some_id/label_sortings/.completed \
        results/tables/oncoprints/all.some_id/variant-oncoprints/.completed
@@ -106,15 +120,16 @@ log = "logs/coverage/SRR702070_group_coverage_table.log"
 conda = "envs/pystats.yaml"
 
 # ---- upstream rule: datavzrd_variants_calls ---------------------------------
-# datavzrd v9.14.0 wrapper. Default target (upstream rule all).
+# datavzrd v9.18.1 wrapper. Default target (upstream rule all).
 [[rules]]
 name = "datavzrd_variants_calls"
-description = "Render the interactive variant call report (datavzrd v9.14.0 wrapper)"
+description = "Render the interactive variant call report (datavzrd v9.18.1 wrapper)"
 input = [
-    "results/tables/SRR702070_group/SRR702070_group.some_id.variants.postprocessed.fdr-controlled.tsv",
+    "results/tables/SRR702070_group/SRR702070_group.some_id.variants.postprocessed.fdr-controlled.parquet",
     "resources/datavzrd/linkouts.js",
     "resources/datavzrd/variant-calls-template.datavzrd.yaml",
     "results/tables/oncoprints/all.some_id/label_sortings/.completed",
+    "results/tables/oncoprints/all.some_id/color-domains.json",
 ]
 output = ["results/datavzrd-report/all.some_id.variants.fdr-controlled/index.html"]
 target = true
@@ -129,11 +144,11 @@ log = "logs/datavzrd_report/all.some_id.log"
 conda = "envs/datavzrd.yaml"
 
 # ---- upstream rule: datavzrd_coverage ---------------------------------------
-# datavzrd v9.14.0 wrapper. Default target (upstream rule all).
+# datavzrd v9.18.1 wrapper. Default target (upstream rule all).
 
 [[rules]]
 name = "datavzrd_coverage"
-description = "Render the per-gene coverage report (datavzrd v9.14.0 wrapper)"
+description = "Render the per-gene coverage report (datavzrd v9.18.1 wrapper)"
 input = [
     "results/coverage/SRR702070_group.csv",
     "resources/datavzrd/gene-coverage-template.datavzrd.yaml",
@@ -160,10 +175,10 @@ name = "process_fusion_call_tables"
 description = "Join fusions table partners with arriba annotations (scripts/create_fusions_table_per_group.py)"
 when = "wildcard.calling == \"fusions\" || wildcard.calling == \"variants,fusions\""
 input = [
-    "results/tables/{group}/{group}.some_id.fusions.fdr-controlled.tsv",
+    "results/tables/{group}/{group}.some_id.fusions.fdr-controlled.parquet",
     "results/arriba/SRR702070.fusions.annotated.tsv",
 ]
-output = ["results/tables/{group}/{group}.some_id.fusions.joined.fdr-controlled.tsv"]
+output = ["results/tables/{group}/{group}.some_id.fusions.joined.fdr-controlled.parquet"]
 shell = """
 python scripts/create_fusions_table_per_group.py {input[0]} {input[1]} \
   --output {output} --log {log}
@@ -174,15 +189,15 @@ log = "logs/join_partner/{group}.some_id.log"
 conda = "envs/pystats.yaml"
 
 # ---- upstream rule: datavzrd_fusion_calls ------------------------------------
-# datavzrd v9.14.0 wrapper, fusion-calls template. Default target on the
+# datavzrd v9.18.1 wrapper, fusion-calls template. Default target on the
 # fusions path (upstream rule all requests the fusions report when the group
 # calls fusions). Gated like the filtering fusions chain.
 [[rules]]
 name = "datavzrd_fusion_calls"
-description = "Render the interactive fusion call report (datavzrd v9.14.0 wrapper)"
+description = "Render the interactive fusion call report (datavzrd v9.18.1 wrapper)"
 when = "wildcard.calling == \"fusions\" || wildcard.calling == \"variants,fusions\""
 input = [
-    "results/tables/{group}/{group}.some_id.fusions.joined.fdr-controlled.tsv",
+    "results/tables/{group}/{group}.some_id.fusions.joined.fdr-controlled.parquet",
     "resources/datavzrd/fusion-calls-template.datavzrd.yaml",
 ]
 output = ["results/datavzrd-report/all.some_id.fusions.fdr-controlled/index.html"]
